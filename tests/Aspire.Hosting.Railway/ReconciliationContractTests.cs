@@ -173,6 +173,23 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
+    public async Task KnownTerminalOrdinaryFailureAllowsANewIntentionalInvocation()
+    {
+        using Provider provider = new() { Status = "FAILED" };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new();
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.True((bool)identity["pending"]!);
+        Assert.Null(identity["deploymentAttempt"]);
+        Assert.Null(identity["applyPhase"]);
+        provider.Status = "SUCCESS";
+        RailwayServiceResult next = await ApplyAsync(provider, options, identity);
+        Assert.Equal("deployment-2", next.DeploymentId);
+        Assert.Equal(2, provider.DeployRequests);
+        Assert.False((bool)identity["pending"]!);
+    }
+
+    [Fact]
     public async Task LegacyUncertainFiniteStateCannotSilentlyStartAnotherExecution()
     {
         using Provider provider = new();

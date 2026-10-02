@@ -223,9 +223,9 @@ internal sealed class RailwayServiceReconciler
             {
                 await WaitForDeploymentAsync(target, serviceId, deploymentId!, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
             }
-            catch (RailwayDeploymentFailedException) when (options.WaitForCompletion)
+            catch (RailwayDeploymentFailedException)
             {
-                identity["pending"] = false;
+                identity["pending"] = !options.WaitForCompletion;
                 identity.Remove("deploymentAttempt");
                 identity.Remove("applyPhase");
                 await saveIdentity().ConfigureAwait(false);
