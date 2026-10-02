@@ -221,7 +221,7 @@ internal sealed class RailwayServiceReconciler
         {
             try
             {
-                await WaitForDeploymentAsync(target, serviceId, deploymentId!, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
+                await WaitForDeploymentAsync(target, serviceId, deploymentId!, image, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
             }
             catch (RailwayDeploymentFailedException)
             {
@@ -313,10 +313,12 @@ internal sealed class RailwayServiceReconciler
             await saveIdentity().ConfigureAwait(false);
             try
             {
-                JsonObject deployed = await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeployV2(serviceId:$service,environmentId:$environment)}",
+                JsonObject deployed = await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeploy(serviceId:$service,environmentId:$environment,latestCommit:true)}",
                     new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-                attempt["id"] = (string)deployed["serviceInstanceDeployV2"]!;
-                await saveIdentity().ConfigureAwait(false);
+                if ((bool?)deployed["serviceInstanceDeploy"] == false)
+                { throw new RailwayDeploymentRejectedException(); }
+                if ((bool?)deployed["serviceInstanceDeploy"] != true)
+                { throw new InvalidOperationException("Railway did not confirm acceptance of the source deployment request. Reconcile the recorded request before retrying."); }
             }
             catch (RailwayDeploymentNotFoundException)
             {
@@ -599,12 +601,12 @@ internal sealed class RailwayServiceReconciler
         return true;
     }
 
-    private async Task WaitForDeploymentAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, RailwayServiceOptions options, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task WaitForDeploymentAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, string image, RailwayServiceOptions options, TimeSpan timeout, CancellationToken cancellationToken)
     {
         Stopwatch timer = Stopwatch.StartNew();
         while (timer.Elapsed < timeout)
         {
-            JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId status deploymentStopped instances{id status}}}",
+            JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId status meta deploymentStopped instances{id status}}}",
                 new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
             JsonNode deployment = data["deployment"]!;
             if ((string?)deployment["projectId"] != target.ProjectId || (string?)deployment["environmentId"] != target.EnvironmentId || (string?)deployment["serviceId"] != serviceId)
@@ -613,6 +615,13 @@ internal sealed class RailwayServiceReconciler
             }
 
             string status = (string)deployment["status"]!;
+            string? deployedImage = (string?)deployment["meta"]?["image"];
+            if ((deployedImage is not null && deployedImage != image)
+                || ((status is "SUCCESS" or "SLEEPING") && deployedImage is null))
+            {
+                throw new InvalidOperationException("The exact Railway deployment does not prove the requested retained image. Reconcile its recorded execution before requesting another process.");
+            }
+
             string[] instances = [.. deployment["instances"]!.AsArray().Select(instance => (string)instance!["status"]!)];
             bool finite = options.WaitForCompletion;
             if (status is "FAILED" or "CRASHED" or "REMOVED" or "REMOVING" or "SKIPPED" or "NEEDS_APPROVAL"

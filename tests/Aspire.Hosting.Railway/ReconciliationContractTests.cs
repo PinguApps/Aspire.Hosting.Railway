@@ -9,6 +9,40 @@ namespace Aspire.Hosting.Railway.Tests;
 public sealed class ReconciliationContractTests
 {
     private const string Image = "ghcr.io/pinguapps/test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private const string UpdatedImage = "ghcr.io/pinguapps/test@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    [Fact]
+    public async Task ChangedRetainedImageDeploysTheConfiguredSource()
+    {
+        using Provider provider = new();
+        JsonObject identity = [];
+        await ApplyAsync(provider, new(), identity);
+        RailwayServiceResult updated = await ApplyAsync(provider, new(), identity, UpdatedImage);
+        Assert.Equal("deployment-2", updated.DeploymentId);
+        Assert.Equal(UpdatedImage, provider.DeployedImage);
+        Assert.True(provider.LastDeployWasFromSource);
+        int requests = provider.DeployRequests;
+        Assert.False((await ApplyAsync(provider, new(), identity, UpdatedImage)).Deployed);
+        Assert.Equal(requests, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task WrongInitialDeploymentImageCannotPassCompletion()
+    {
+        using Provider provider = new() { ForcedDeploymentImage = UpdatedImage };
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), []));
+    }
+
+    [Fact]
+    public async Task WrongRecoveredFiniteImageCannotPassOrExecuteAgain()
+    {
+        using Provider provider = new() { Status = "SUCCESS", InstanceStatus = "EXITED", Stopped = true, ForcedDeploymentImage = UpdatedImage, LoseNextDeployResponse = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity));
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Equal(1, provider.DeployRequests);
+    }
 
     [Theory]
     [InlineData("project")]
@@ -484,11 +518,11 @@ public sealed class ReconciliationContractTests
         return reconciler.PreflightAsync(Target(), "web", "web", Image, options, identity, TestContext.Current.CancellationToken);
     }
 
-    private static Task<RailwayServiceResult> ApplyAsync(Provider provider, RailwayServiceOptions options, JsonObject identity)
+    private static Task<RailwayServiceResult> ApplyAsync(Provider provider, RailwayServiceOptions options, JsonObject identity, string image = Image)
     {
         HttpClient httpClient = new(provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
-        return reconciler.ApplyAsync(Target(), "web", "web", Image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, TestContext.Current.CancellationToken);
+        return reconciler.ApplyAsync(Target(), "web", "web", image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, TestContext.Current.CancellationToken);
     }
 
     private sealed class Provider : HttpMessageHandler
@@ -507,7 +541,12 @@ public sealed class ReconciliationContractTests
         internal bool LoseNextDeployResponse { get; set; }
         internal bool HideDeploymentIds { get; set; }
         internal bool FailNextOutputRead { get; set; }
+        internal string? ForcedDeploymentImage { get; set; }
+        internal string? DeployedImage { get; private set; }
+        internal bool LastDeployWasFromSource { get; private set; }
         private readonly JsonArray _deploymentIds = [];
+        private readonly Dictionary<string, string?> _deploymentImages = new(StringComparer.Ordinal);
+        private JsonObject _deploySettings = [];
         internal JsonNode? LastPatch { get; private set; }
         internal JsonObject Regions { get; private set; } = new() { ["sfo"] = new JsonObject { ["numReplicas"] = 1 } };
         internal string Status { get; set; } = "SUCCESS";
@@ -625,8 +664,10 @@ public sealed class ReconciliationContractTests
                 { _service!["source"] = patch["source"]!.DeepClone(); }
                 if (patch["deploy"] is not null)
                 {
-                    _service!["latestDeployment"] = new JsonObject { ["id"] = "deployment", ["meta"] = new JsonObject { ["serviceManifest"] = new JsonObject { ["deploy"] = patch["deploy"]!.DeepClone() } } };
-                    _service["latestDeployment"]!["meta"]!["serviceManifest"]!["deploy"]!["multiRegionConfig"] = Regions.DeepClone();
+                    _deploySettings = patch["deploy"]!.DeepClone().AsObject();
+                    _deploySettings["multiRegionConfig"] = Regions.DeepClone();
+                    foreach (KeyValuePair<string, JsonNode?> setting in _deploySettings)
+                    { _service![setting.Key] = setting.Value?.DeepClone(); }
                 }
 
                 if (patch["variables"] is JsonObject variables)
@@ -671,11 +712,13 @@ public sealed class ReconciliationContractTests
                     FailNextDeploy = false;
                     return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "provider-secret" }) });
                 }
-                if (query.Contains("serviceInstanceDeployV2", StringComparison.Ordinal))
+                LastDeployWasFromSource = query.Contains("latestCommit:true", StringComparison.Ordinal);
                 {
                     string id = _deploymentIds.Count == 0 ? "deployment" : $"deployment-{_deploymentIds.Count + 1}";
                     _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = id } });
-                    _service!["latestDeployment"]!["id"] = id;
+                    DeployedImage = ForcedDeploymentImage ?? (LastDeployWasFromSource ? (string?)_service!["source"]?["image"] : DeployedImage ?? (string?)_service!["source"]?["image"]);
+                    _deploymentImages[id] = DeployedImage;
+                    _service!["latestDeployment"] = new JsonObject { ["id"] = id, ["meta"] = new JsonObject { ["image"] = DeployedImage, ["serviceManifest"] = new JsonObject { ["deploy"] = _deploySettings.DeepClone() } } };
                     if (AmbiguousInitialDeployments)
                     { _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = "operator-deployment" } }); }
                     if (LoseNextDeployResponse)
@@ -683,15 +726,16 @@ public sealed class ReconciliationContractTests
                         LoseNextDeployResponse = false;
                         throw new HttpRequestException("Simulated lost accepted response.");
                     }
-                    data["serviceInstanceDeployV2"] = id;
+                    if (query.Contains("serviceInstanceDeployV2", StringComparison.Ordinal))
+                    { data["serviceInstanceDeployV2"] = id; }
+                    else
+                    { data["serviceInstanceDeploy"] = true; }
                 }
-                else
-                { data["serviceInstanceDeploy"] = true; }
             }
             else
             {
                 data["deployment"] = query.Contains("deployment(id:", StringComparison.Ordinal)
-                    ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
+                    ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["meta"] = new JsonObject { ["image"] = _deploymentImages.GetValueOrDefault((string)args["id"]!) }, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
                     : throw new InvalidOperationException($"Unexpected test operation: {query}");
             }
 

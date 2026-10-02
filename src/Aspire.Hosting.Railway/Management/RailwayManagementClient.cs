@@ -44,12 +44,12 @@ internal sealed class RailwayManagementClient
             ?? throw new InvalidOperationException("Railway returned an empty control-plane response.");
         if (body["errors"] is JsonArray { Count: > 0 } errors)
         {
-            if (operation == "serviceInstanceDeployV2" && errors.All(error => (string?)error?["message"] == "Deployment not found"))
+            if (operation is "serviceInstanceDeployV2" or "serviceInstanceDeploy" && errors.All(error => (string?)error?["message"] == "Deployment not found"))
             {
                 throw new RailwayDeploymentNotFoundException();
             }
 
-            if (operation == "serviceInstanceDeployV2")
+            if (operation is "serviceInstanceDeployV2" or "serviceInstanceDeploy")
             {
                 throw new RailwayDeploymentRejectedException();
             }
@@ -127,7 +127,7 @@ internal sealed class RailwayDeploymentNotFoundException : InvalidOperationExcep
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "This internal rejection deliberately accepts no provider message or credentials.")]
 internal sealed class RailwayDeploymentRejectedException : InvalidOperationException
 {
-    internal RailwayDeploymentRejectedException() : base("Railway rejected operation 'serviceInstanceDeployV2'. Provider details are suppressed to protect workload secrets.")
+    internal RailwayDeploymentRejectedException() : base("Railway rejected the service deployment operation. Provider details are suppressed to protect workload secrets.")
     {
     }
 }
