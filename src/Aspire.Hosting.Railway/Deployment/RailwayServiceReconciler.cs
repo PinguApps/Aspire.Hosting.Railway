@@ -415,7 +415,11 @@ internal sealed class RailwayServiceReconciler
     private async Task ValidateDeploymentRequestAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, JsonObject attempt, CancellationToken cancellationToken)
     {
         if ((string?)attempt["requestId"] is not string requestId)
-        { return; }
+        {
+            if ((string?)attempt["id"] != deploymentId)
+            { throw new InvalidOperationException("A legacy sent request has no exact recorded deployment identity or marker. Operator reconciliation is required before accepting an observed execution."); }
+            return;
+        }
         JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId meta} deploymentSnapshot(deploymentId:$id){variables}}",
             new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
         JsonNode? deployment = data["deployment"];

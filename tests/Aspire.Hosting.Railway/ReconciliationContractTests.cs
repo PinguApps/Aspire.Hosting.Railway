@@ -20,6 +20,30 @@ public sealed class ReconciliationContractTests
         Assert.Equal(1, provider.DeployRequests);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MarkerlessSentLegacyRequestRequiresAnAlreadyRecordedExactId(bool recordedId)
+    {
+        using Provider provider = new() { FailNextOutputRead = true, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity));
+        identity["deploymentAttempt"]!.AsObject().Remove("requestId");
+        if (recordedId)
+        {
+            RailwayServiceResult result = await ApplyAsync(provider, options, identity);
+            Assert.Equal("deployment", result.DeploymentId);
+        }
+        else
+        {
+            identity["deploymentAttempt"]!.AsObject().Remove("id");
+            InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+            Assert.Contains("reconciliation", error.Message, StringComparison.Ordinal);
+        }
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
     [Fact]
     public async Task UnrelatedSameImageDeploymentCannotSatisfyTheRecordedRequest()
     {
