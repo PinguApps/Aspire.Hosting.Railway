@@ -9,6 +9,197 @@ namespace Aspire.Hosting.Railway.Tests;
 public sealed class ReconciliationContractTests
 {
     private const string Image = "ghcr.io/pinguapps/test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private const string UpdatedImage = "ghcr.io/pinguapps/test@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    [Fact]
+    public async Task ScopedCommitQueueReferenceCorrelatesWithTheDeploymentPatchId()
+    {
+        using Provider provider = new() { ReturnCompositePatchReference = true };
+        RailwayServiceResult result = await ApplyAsync(provider, new(), []);
+        Assert.Equal("deployment", result.DeploymentId);
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MarkerlessSentLegacyRequestRequiresAnAlreadyRecordedExactId(bool recordedId)
+    {
+        using Provider provider = new() { FailNextOutputRead = true, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity));
+        identity["deploymentAttempt"]!.AsObject().Remove("requestId");
+        if (recordedId)
+        {
+            RailwayServiceResult result = await ApplyAsync(provider, options, identity);
+            Assert.Equal("deployment", result.DeploymentId);
+        }
+        else
+        {
+            identity["deploymentAttempt"]!.AsObject().Remove("id");
+            InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+            Assert.Contains("reconciliation", error.Message, StringComparison.Ordinal);
+        }
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task UnrelatedSameImageDeploymentCannotSatisfyTheRecordedRequest()
+    {
+        using Provider provider = new() { WrongRequestMarker = true, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Contains("association", error.Message, StringComparison.Ordinal);
+        Assert.Equal(Image, provider.DeployedImage);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task ReservedRequestVariableFailsBeforeAnyMutationOrAttempt()
+    {
+        using Provider provider = new();
+        JsonObject identity = [];
+        using HttpClient httpClient = new(provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        await Assert.ThrowsAsync<ArgumentException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, new(),
+            new(StringComparer.Ordinal) { ["PINGUAPPS_DEPLOYMENT_REQUEST"] = "user-value" }, identity, () => Task.CompletedTask, TestContext.Current.CancellationToken));
+        Assert.Equal(0, provider.Mutations);
+        Assert.Null(identity["deploymentAttempt"]);
+    }
+
+    [Fact]
+    public async Task ChangedOrdinaryIntentRemovesVariablesFromAnUncertainAcceptedPatch()
+    {
+        using Provider provider = new() { LoseNextDeployResponse = true };
+        JsonObject identity = [];
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, new(), identity,
+            variables: new(StringComparer.Ordinal) { ["REMOVED"] = "runtime-value" }));
+        Assert.Contains("REMOVED", identity["deploymentAttempt"]!["managedVariables"]!.AsArray().Select(name => (string)name!));
+        await ApplyAsync(provider, new(), identity);
+        Assert.False(provider.HasVariable("REMOVED"));
+        Assert.True(provider.LastPatch!["variables"]!.AsObject().ContainsKey("REMOVED"));
+        Assert.Null(provider.LastPatch["variables"]!["REMOVED"]);
+    }
+
+    [Fact]
+    public async Task UnchangedCronActivationStillRequiresExactImageMetadata()
+    {
+        using Provider provider = new() { InstanceStatus = "CREATED" };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { CronSchedule = "*/5 * * * *", RestartPolicy = RailwayRestartPolicy.Never };
+        await ApplyAsync(provider, options, identity);
+        provider.OmitReportedImage = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChangedRetainedImageDeploysTheConfiguredSource(bool finite)
+    {
+        using Provider provider = new() { InstanceStatus = finite ? "EXITED" : "RUNNING", Stopped = finite };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = finite, RestartPolicy = finite ? RailwayRestartPolicy.Never : RailwayRestartPolicy.OnFailure };
+        await ApplyAsync(provider, options, identity);
+        RailwayServiceResult updated = await ApplyAsync(provider, options, identity, UpdatedImage);
+        Assert.Equal("deployment-2", updated.DeploymentId);
+        Assert.Equal(UpdatedImage, provider.DeployedImage);
+        Assert.True(provider.LastDeployWasFromSource);
+        if (!finite)
+        {
+            int requests = provider.DeployRequests;
+            Assert.False((await ApplyAsync(provider, options, identity, UpdatedImage)).Deployed);
+            Assert.Equal(requests, provider.DeployRequests);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WrongInitialDeploymentImageCannotPassCompletion(bool finite)
+    {
+        using Provider provider = new() { ForcedDeploymentImage = UpdatedImage, InstanceStatus = finite ? "EXITED" : "RUNNING", Stopped = finite };
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider,
+            new() { WaitForCompletion = finite, RestartPolicy = finite ? RailwayRestartPolicy.Never : RailwayRestartPolicy.OnFailure }, []));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingImageMetadataCannotProveSuccessfulCompletion(bool finite)
+    {
+        using Provider provider = new() { OmitReportedImage = true, InstanceStatus = finite ? "EXITED" : "RUNNING", Stopped = finite };
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider,
+            new() { WaitForCompletion = finite, RestartPolicy = finite ? RailwayRestartPolicy.Never : RailwayRestartPolicy.OnFailure }, []));
+    }
+
+    [Fact]
+    public async Task ConfiguredNewImageWithStaleDeploymentIsRecoveredByThePatch()
+    {
+        using Provider provider = new();
+        JsonObject identity = [];
+        await ApplyAsync(provider, new(), identity);
+        provider.SetConfiguredImage(UpdatedImage);
+        RailwayServiceResult result = await ApplyAsync(provider, new(), identity, UpdatedImage);
+        Assert.Equal("deployment-2", result.DeploymentId);
+        Assert.Equal(UpdatedImage, provider.DeployedImage);
+        Assert.Equal(2, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task UnchangedFiniteInvocationForcesOneRealConfigurationChange()
+    {
+        using Provider provider = new() { InstanceStatus = "EXITED", Stopped = true };
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
+        JsonObject identity = [];
+        await ApplyAsync(provider, options, identity);
+        await ApplyAsync(provider, options, identity);
+        Assert.Equal(2, provider.AcceptedRequestMarkers.Count);
+        Assert.NotEqual(provider.AcceptedRequestMarkers[0], provider.AcceptedRequestMarkers[1]);
+    }
+
+    [Fact]
+    public async Task LostChangedConfigurationResponseRecoversWithoutAnotherPatch()
+    {
+        using Provider provider = new() { InstanceStatus = "EXITED", Stopped = true };
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
+        JsonObject identity = [];
+        await ApplyAsync(provider, options, identity);
+        provider.LoseNextDeployResponse = true;
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity, UpdatedImage));
+        string requestId = (string)identity["deploymentAttempt"]!["requestId"]!;
+        RailwayServiceResult recovered = await ApplyAsync(provider, options, identity, UpdatedImage);
+        Assert.Equal("deployment-2", recovered.DeploymentId);
+        Assert.Equal(UpdatedImage, provider.DeployedImage);
+        Assert.Equal(2, provider.DeployRequests);
+        Assert.Equal(requestId, provider.AcceptedRequestMarkers[^1]);
+    }
+
+    [Fact]
+    public async Task WrongRetainedDeploymentImageCannotPassUnchangedReconciliation()
+    {
+        using Provider provider = new();
+        JsonObject identity = [];
+        await ApplyAsync(provider, new(), identity);
+        provider.ReportedImage = UpdatedImage;
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), identity));
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task WrongRecoveredFiniteImageCannotPassOrExecuteAgain()
+    {
+        using Provider provider = new() { Status = "SUCCESS", InstanceStatus = "EXITED", Stopped = true, ForcedDeploymentImage = UpdatedImage, LoseNextDeployResponse = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity));
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Equal(1, provider.DeployRequests);
+    }
 
     [Theory]
     [InlineData("project")]
@@ -91,13 +282,56 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
-    public async Task InitialDeploymentRetriesOnlyTheKnownMissingDeploymentResponse()
+    public async Task RejectedConfigurationDeploymentDoesNotBlindlyRetry()
     {
         using Provider provider = new() { InitialMissingResponses = 1 };
-        RailwayServiceResult result = await ApplyAsync(provider, new(), []);
-        Assert.Equal("deployment", result.DeploymentId);
-        Assert.Equal(2, provider.DeployRequests);
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), []));
+        Assert.Equal(1, provider.DeployRequests);
         Assert.Equal(1, provider.Creates);
+    }
+
+    [Fact]
+    public async Task RejectedFiniteRequestAllowsFreshIntentAfterOperatorDeployment()
+    {
+        using Provider provider = new() { FailNextDeploy = true, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Null(identity["deploymentAttempt"]);
+        provider.CreateOperatorDeployment();
+        int requests = provider.DeployRequests;
+        RailwayServiceResult result = await ApplyAsync(provider, options, identity, UpdatedImage);
+        Assert.Equal("deployment-2", result.DeploymentId);
+        Assert.Equal(UpdatedImage, provider.DeployedImage);
+        Assert.Equal(requests + 1, provider.DeployRequests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LegacyUnsentAttemptReceivesMarkerAndCurrentBaseline(bool changeImage)
+    {
+        using Provider provider = new() { FailNextDeploy = true, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        JsonObject? savedAttempt = null;
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity, saveIdentity: () =>
+        {
+            if (identity["deploymentAttempt"] is JsonObject attempt)
+            { savedAttempt = attempt.DeepClone().AsObject(); }
+            return Task.CompletedTask;
+        }));
+        Assert.NotNull(savedAttempt);
+        savedAttempt["sent"] = false;
+        savedAttempt.Remove("requestId");
+        savedAttempt.Remove("operation");
+        identity["deploymentAttempt"] = savedAttempt;
+        provider.CreateOperatorDeployment();
+        string image = changeImage ? UpdatedImage : Image;
+        RailwayServiceResult result = await ApplyAsync(provider, options, identity, image);
+        Assert.Equal("deployment-2", result.DeploymentId);
+        Assert.Equal(image, provider.DeployedImage);
+        Assert.Matches("^[a-f0-9]{32}$", provider.AcceptedRequestMarkers[^1]);
     }
 
     [Fact]
@@ -205,7 +439,7 @@ public sealed class ReconciliationContractTests
     public async Task InitialDeploymentRejectsConcurrentAmbiguousIdentities()
     {
         using Provider provider = new() { AmbiguousInitialDeployments = true };
-        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), []));
+        InvalidOperationException error = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), []));
         Assert.Contains("ambiguous", error.Message, StringComparison.Ordinal);
         Assert.Equal(1, provider.DeployRequests);
     }
@@ -469,7 +703,7 @@ public sealed class ReconciliationContractTests
     public async Task ProviderErrorsNeverExposeCredentials()
     {
         using Provider provider = new() { FailNextPatch = true };
-        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), []));
+        InvalidOperationException error = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), []));
         Assert.DoesNotContain("provider-secret", error.ToString(), StringComparison.Ordinal);
     }
 
@@ -484,11 +718,11 @@ public sealed class ReconciliationContractTests
         return reconciler.PreflightAsync(Target(), "web", "web", Image, options, identity, TestContext.Current.CancellationToken);
     }
 
-    private static Task<RailwayServiceResult> ApplyAsync(Provider provider, RailwayServiceOptions options, JsonObject identity)
+    private static Task<RailwayServiceResult> ApplyAsync(Provider provider, RailwayServiceOptions options, JsonObject identity, string image = Image, Func<Task>? saveIdentity = null, Dictionary<string, string>? variables = null)
     {
         HttpClient httpClient = new(provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
-        return reconciler.ApplyAsync(Target(), "web", "web", Image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, TestContext.Current.CancellationToken);
+        return reconciler.ApplyAsync(Target(), "web", "web", image, options, variables ?? new(StringComparer.Ordinal), identity, saveIdentity ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
     }
 
     private sealed class Provider : HttpMessageHandler
@@ -507,7 +741,19 @@ public sealed class ReconciliationContractTests
         internal bool LoseNextDeployResponse { get; set; }
         internal bool HideDeploymentIds { get; set; }
         internal bool FailNextOutputRead { get; set; }
+        internal string? ForcedDeploymentImage { get; set; }
+        internal string? ReportedImage { get; set; }
+        internal bool OmitReportedImage { get; set; }
+        internal bool WrongRequestMarker { get; set; }
+        internal bool ReturnCompositePatchReference { get; set; }
+        internal string? DeployedImage { get; private set; }
+        internal bool LastDeployWasFromSource { get; private set; }
         private readonly JsonArray _deploymentIds = [];
+        private readonly Dictionary<string, string?> _deploymentImages = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _deploymentMarkers = new(StringComparer.Ordinal);
+        private JsonObject _deploySettings = [];
+        private JsonNode? _lastCommittedPatch;
+        internal List<string> AcceptedRequestMarkers { get; } = [];
         internal JsonNode? LastPatch { get; private set; }
         internal JsonObject Regions { get; private set; } = new() { ["sfo"] = new JsonObject { ["numReplicas"] = 1 } };
         internal string Status { get; set; } = "SUCCESS";
@@ -523,6 +769,15 @@ public sealed class ReconciliationContractTests
         internal bool ContainsVariable(string name) => _variables.ContainsKey(name) || _sealedNames.Contains(name);
 
         internal void SetUnmanagedVariable(string name, string value) => _variables[name] = value;
+
+        internal bool HasVariable(string name) => _variables.ContainsKey(name);
+
+        internal void SetConfiguredImage(string image) => _service!["source"] = new JsonObject { ["image"] = image };
+
+        internal void CreateOperatorDeployment()
+        {
+            using HttpResponseMessage response = Deploy("environmentPatchCommit", fromSource: true);
+        }
 
         internal void CreateService(bool marked)
         {
@@ -620,13 +875,16 @@ public sealed class ReconciliationContractTests
                 }
 
                 JsonNode patch = args["patch"]!["services"]!["service"]!;
+                bool changed = !JsonNode.DeepEquals(_lastCommittedPatch, patch);
                 LastPatch = patch.DeepClone();
                 if (patch["source"] is not null)
                 { _service!["source"] = patch["source"]!.DeepClone(); }
                 if (patch["deploy"] is not null)
                 {
-                    _service!["latestDeployment"] = new JsonObject { ["id"] = "deployment", ["meta"] = new JsonObject { ["serviceManifest"] = new JsonObject { ["deploy"] = patch["deploy"]!.DeepClone() } } };
-                    _service["latestDeployment"]!["meta"]!["serviceManifest"]!["deploy"]!["multiRegionConfig"] = Regions.DeepClone();
+                    _deploySettings = patch["deploy"]!.DeepClone().AsObject();
+                    _deploySettings["multiRegionConfig"] = Regions.DeepClone();
+                    foreach (KeyValuePair<string, JsonNode?> setting in _deploySettings)
+                    { _service![setting.Key] = setting.Value?.DeepClone(); }
                 }
 
                 if (patch["variables"] is JsonObject variables)
@@ -651,6 +909,8 @@ public sealed class ReconciliationContractTests
                     }
                 }
 
+                if (query.Contains("skipDeploys:false", StringComparison.Ordinal) && changed)
+                { return Deploy("environmentPatchCommit", fromSource: true); }
                 data["environmentPatchCommit"] = "patch";
             }
             else if (query.Contains("serviceInstanceUpdate(", StringComparison.Ordinal))
@@ -660,42 +920,65 @@ public sealed class ReconciliationContractTests
             }
             else if (query.Contains("serviceInstanceDeploy", StringComparison.Ordinal))
             {
-                DeployRequests++;
-                if (InitialMissingResponses > 0)
-                {
-                    InitialMissingResponses--;
-                    return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "Deployment not found" }) });
-                }
-                if (FailNextDeploy)
-                {
-                    FailNextDeploy = false;
-                    return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "provider-secret" }) });
-                }
-                if (query.Contains("serviceInstanceDeployV2", StringComparison.Ordinal))
-                {
-                    string id = _deploymentIds.Count == 0 ? "deployment" : $"deployment-{_deploymentIds.Count + 1}";
-                    _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = id } });
-                    _service!["latestDeployment"]!["id"] = id;
-                    if (AmbiguousInitialDeployments)
-                    { _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = "operator-deployment" } }); }
-                    if (LoseNextDeployResponse)
-                    {
-                        LoseNextDeployResponse = false;
-                        throw new HttpRequestException("Simulated lost accepted response.");
-                    }
-                    data["serviceInstanceDeployV2"] = id;
-                }
-                else
-                { data["serviceInstanceDeploy"] = true; }
+                return Deploy(query.Contains("serviceInstanceDeployV2", StringComparison.Ordinal) ? "serviceInstanceDeployV2" : "serviceInstanceDeploy", query.Contains("latestCommit:true", StringComparison.Ordinal));
             }
             else
             {
+                string? reportedImage = ReportedImage ?? _deploymentImages.GetValueOrDefault((string)args["id"]!);
+                if (OmitReportedImage)
+                { reportedImage = null; }
                 data["deployment"] = query.Contains("deployment(id:", StringComparison.Ordinal)
-                    ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
+                    ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["meta"] = new JsonObject { ["image"] = reportedImage, ["patchId"] = $"patch-{args["id"]}" }, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
                     : throw new InvalidOperationException($"Unexpected test operation: {query}");
+                if (query.Contains("deploymentSnapshot", StringComparison.Ordinal))
+                {
+                    string marker = _deploymentMarkers.GetValueOrDefault((string)args["id"]!) ?? string.Empty;
+                    if (WrongRequestMarker)
+                    { marker = "unrelated-operator-request"; }
+                    data["deploymentSnapshot"] = new JsonObject { ["variables"] = new JsonObject { ["PINGUAPPS_DEPLOYMENT_REQUEST"] = marker } };
+                }
             }
 
             return Response(new JsonObject { ["data"] = data });
+        }
+
+        private HttpResponseMessage Deploy(string operation, bool fromSource)
+        {
+            DeployRequests++;
+            if (InitialMissingResponses > 0)
+            {
+                InitialMissingResponses--;
+                return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "Deployment not found" }) });
+            }
+            if (FailNextDeploy)
+            {
+                FailNextDeploy = false;
+                return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "provider-secret" }) });
+            }
+            LastDeployWasFromSource = fromSource;
+            _lastCommittedPatch = LastPatch?.DeepClone();
+            AcceptedRequestMarkers.Add((string?)LastPatch?["variables"]?["PINGUAPPS_DEPLOYMENT_REQUEST"]?["value"] ?? string.Empty);
+            string id = _deploymentIds.Count == 0 ? "deployment" : $"deployment-{_deploymentIds.Count + 1}";
+            _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = id } });
+            DeployedImage = ForcedDeploymentImage ?? (fromSource ? (string?)_service!["source"]?["image"] : DeployedImage ?? (string?)_service!["source"]?["image"]);
+            _deploymentImages[id] = DeployedImage;
+            _deploymentMarkers[id] = AcceptedRequestMarkers[^1];
+            _service!["latestDeployment"] = new JsonObject { ["id"] = id, ["meta"] = new JsonObject { ["image"] = DeployedImage, ["serviceManifest"] = new JsonObject { ["deploy"] = _deploySettings.DeepClone() } } };
+            if (AmbiguousInitialDeployments)
+            { _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = "operator-deployment" } }); }
+            if (LoseNextDeployResponse)
+            {
+                LoseNextDeployResponse = false;
+                throw new HttpRequestException("Simulated lost accepted response.");
+            }
+            if (operation == "environmentPatchCommit")
+            {
+                string patchReference = ReturnCompositePatchReference ? $"commitChanges/environment/patch-{id}" : $"patch-{id}";
+                return Response(new JsonObject { ["data"] = new JsonObject { [operation] = patchReference } });
+            }
+            if (operation == "serviceInstanceDeployV2")
+            { return Response(new JsonObject { ["data"] = new JsonObject { [operation] = id } }); }
+            return Response(new JsonObject { ["data"] = new JsonObject { [operation] = true } });
         }
 
         private static HttpResponseMessage Response(JsonObject body) => new(HttpStatusCode.OK) { Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json") };

@@ -1,5 +1,7 @@
 # Live validation
 
+The initial 1.0.0 report below covered provisioning and unchanged reconciliation. Image updates subsequently exposed a provider source-selection bug; see [the 1.0.1 image-update validation](image-update-validation.md) for the correction and separate A-to-B evidence. The historical bounded `Deployment not found` retry described below applies to 1.0.0 only; 1.0.1 uses atomic configuration deployment and fails immediately on a rejected configuration patch.
+
 Validated on 2 October 2026 with .NET 10.0.401, Aspire CLI/SDK 13.6.0, and a packed `PinguApps.Aspire.Hosting.Railway` 1.0.0 package. The consumer was outside this repository at `V:/pin646-core-consumer`, with a fresh isolated NuGet cache for each package revision. No package was published.
 
 The dedicated [PIN-646 Core Integration project](https://railway.com/project/c702abd1-b897-4c2d-a7d9-3468fad4271a) remains running for inspection. Production environment: `a8bcecee-5ff7-46db-a9a6-575b566a0876`. An environment-scoped project token and shared site marker were used; control-plane credentials and parameter files are excluded from this report and repository.

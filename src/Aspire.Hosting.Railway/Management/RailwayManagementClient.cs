@@ -42,14 +42,9 @@ internal sealed class RailwayManagementClient
 
         JsonObject body = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Railway returned an empty control-plane response.");
-        if (body["errors"] is JsonArray { Count: > 0 } errors)
+        if (body["errors"] is JsonArray { Count: > 0 })
         {
-            if (operation == "serviceInstanceDeployV2" && errors.All(error => (string?)error?["message"] == "Deployment not found"))
-            {
-                throw new RailwayDeploymentNotFoundException();
-            }
-
-            if (operation == "serviceInstanceDeployV2")
+            if (operation is "serviceInstanceDeployV2" or "serviceInstanceDeploy" or "environmentPatchCommit")
             {
                 throw new RailwayDeploymentRejectedException();
             }
@@ -116,18 +111,10 @@ internal sealed class RailwayManagementClient
     }
 }
 
-[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "This internal transport condition deliberately accepts no provider message or credentials.")]
-internal sealed class RailwayDeploymentNotFoundException : InvalidOperationException
-{
-    internal RailwayDeploymentNotFoundException() : base("Railway has not yet established its initial deployment.")
-    {
-    }
-}
-
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "This internal rejection deliberately accepts no provider message or credentials.")]
 internal sealed class RailwayDeploymentRejectedException : InvalidOperationException
 {
-    internal RailwayDeploymentRejectedException() : base("Railway rejected operation 'serviceInstanceDeployV2'. Provider details are suppressed to protect workload secrets.")
+    internal RailwayDeploymentRejectedException() : base("Railway rejected the service deployment operation. Provider details are suppressed to protect workload secrets.")
     {
     }
 }

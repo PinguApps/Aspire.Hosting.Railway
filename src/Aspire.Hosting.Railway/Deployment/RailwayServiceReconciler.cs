@@ -65,6 +65,8 @@ internal sealed class RailwayServiceReconciler
         JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
         JsonObject? instance = FindService(environment, serviceName, (string?)identity["serviceId"] ?? options.ExistingServiceId);
         bool created = false;
+        if (variables.ContainsKey("PINGUAPPS_DEPLOYMENT_REQUEST"))
+        { throw new ArgumentException("PINGUAPPS_DEPLOYMENT_REQUEST is reserved for Railway deployment identity.", nameof(variables)); }
         variables["PINGUAPPS_SITE_KEY"] = target.SiteKey;
         variables["PINGUAPPS_RESOURCE_NAME"] = resourceName;
         if (options.Port is int port)
@@ -80,9 +82,17 @@ internal sealed class RailwayServiceReconciler
         }
         if (identity["deploymentAttempt"] is JsonObject priorAttempt && (string?)priorAttempt["desiredFingerprint"] != desiredFingerprint)
         {
-            if (options.WaitForCompletion)
+            if (options.WaitForCompletion && (bool?)priorAttempt["sent"] != false)
             {
                 throw new InvalidOperationException("A pending finite Railway deployment has different desired configuration or credentials. Reconcile its recorded execution before requesting another process.");
+            }
+
+            if ((bool?)priorAttempt["sent"] == true && priorAttempt["managedVariables"] is JsonArray attemptedNames)
+            {
+                IEnumerable<string> previousNames = identity["managedVariables"] is JsonArray names
+                    ? names.Select(name => (string)name!) : [];
+                identity["managedVariables"] = new JsonArray([.. previousNames.Concat(attemptedNames.Select(name => (string)name!))
+                    .Distinct(StringComparer.Ordinal).Select(name => JsonValue.Create(name))]);
             }
 
             identity.Remove("deploymentAttempt");
@@ -153,45 +163,55 @@ internal sealed class RailwayServiceReconciler
         bool volumesChanged = await EnsureVolumesAsync(target, environment, serviceId, options, identity, saveIdentity, cancellationToken).ConfigureAwait(false);
         bool domainsChanged = await EnsureDomainsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
         bool limitsChanged = await EnsureLimitsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
-        if (variablesChanged || settingsChanged)
+        string? deploymentId = (string?)instance["latestDeployment"]?["id"];
+        bool deploy = created || settingsChanged || variablesChanged || volumesChanged || domainsChanged || limitsChanged
+            || deploymentId is null || options.WaitForCompletion || pending;
+        JsonObject? deploymentPatch = null;
+        if (deploy)
         {
             JsonObject patchService = [];
-            if (settingsChanged)
-            {
-                JsonNode? source = settings["source"];
-                settings.Remove("source");
-                patchService["source"] = source;
-                settings["registryCredentials"] = registryCredentials?.DeepClone();
+            JsonNode? source = settings["source"];
+            settings.Remove("source");
+            patchService["source"] = source;
+            settings["registryCredentials"] = registryCredentials?.DeepClone();
 
-                if (settings["multiRegionConfig"] is JsonObject desiredRegions)
+            if (settings["multiRegionConfig"] is JsonObject desiredRegions)
+            {
+                JsonNode? currentRegions = instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"];
+                if (!JsonNode.DeepEquals(currentRegions, desiredRegions) || (int?)instance["numReplicas"] != 1)
                 {
                     await _client.SendAsync("mutation($input:ServiceInstanceUpdateInput!,$service:String!,$environment:String!){serviceInstanceUpdate(input:$input,serviceId:$service,environmentId:$environment)}",
                         new { input = new { multiRegionConfig = desiredRegions, numReplicas = 1 }, service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-                    settings.Remove("multiRegionConfig");
                 }
-
-                patchService["deploy"] = settings;
+                settings.Remove("multiRegionConfig");
             }
 
-            if (variablesChanged)
+            patchService["deploy"] = settings;
+
+            JsonObject patchVariables = [];
+            foreach (KeyValuePair<string, string> variable in variables)
             {
-                JsonObject patchVariables = [];
-                foreach (KeyValuePair<string, string> variable in variables)
-                {
-                    patchVariables[variable.Key] = new JsonObject { ["value"] = variable.Value, ["isSealed"] = options.SealedVariables.Contains(variable.Key, StringComparer.Ordinal) };
-                }
-
-                foreach (string name in removedVariables)
-                {
-                    patchVariables[name] = null;
-                }
-
-                patchService["variables"] = patchVariables;
+                patchVariables[variable.Key] = new JsonObject { ["value"] = variable.Value, ["isSealed"] = options.SealedVariables.Contains(variable.Key, StringComparer.Ordinal) };
             }
 
-            JsonObject patch = new() { ["services"] = new JsonObject { [serviceId] = patchService } };
-            await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:true)}",
-                new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
+            foreach (string name in removedVariables)
+            {
+                patchVariables[name] = null;
+            }
+
+            patchService["variables"] = patchVariables;
+
+            deploymentPatch = new() { ["services"] = new JsonObject { [serviceId] = patchService } };
+        }
+
+        if (deploy)
+        {
+            deploymentId = await LaunchOrRecoverAsync(target, serviceId, desiredFingerprint, options,
+                identity, saveIdentity, overall, deploymentPatch, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (deploymentPatch is not null)
+        {
             identity["registryFingerprint"] = registryFingerprint;
             identity["managedVariables"] = new JsonArray([.. variables.Keys.Select(name => JsonValue.Create(name))]);
             if (sealedFingerprints is not null)
@@ -208,29 +228,17 @@ internal sealed class RailwayServiceReconciler
             await saveIdentity().ConfigureAwait(false);
         }
 
-        string? deploymentId = (string?)instance["latestDeployment"]?["id"];
-        bool deploy = created || settingsChanged || variablesChanged || volumesChanged || domainsChanged || limitsChanged
-            || deploymentId is null || options.WaitForCompletion || pending;
-        if (deploy)
+        try
         {
-            deploymentId = await LaunchOrRecoverAsync(target, serviceId, deploymentId is null, desiredFingerprint, options,
-                identity, saveIdentity, overall, cancellationToken).ConfigureAwait(false);
+            await WaitForDeploymentAsync(target, serviceId, deploymentId!, image, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
         }
-
-        if (options.CronSchedule is null || deploy)
+        catch (RailwayDeploymentFailedException)
         {
-            try
-            {
-                await WaitForDeploymentAsync(target, serviceId, deploymentId!, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
-            }
-            catch (RailwayDeploymentFailedException)
-            {
-                identity["pending"] = !options.WaitForCompletion;
-                identity.Remove("deploymentAttempt");
-                identity.Remove("applyPhase");
-                await saveIdentity().ConfigureAwait(false);
-                throw;
-            }
+            identity["pending"] = !options.WaitForCompletion;
+            identity.Remove("deploymentAttempt");
+            identity.Remove("applyPhase");
+            await saveIdentity().ConfigureAwait(false);
+            throw;
         }
 
         JsonObject rendered = await _client.SendAsync("query($project:String!,$environment:String!,$service:String){variables(projectId:$project,environmentId:$environment,serviceId:$service)}",
@@ -270,13 +278,20 @@ internal sealed class RailwayServiceReconciler
         return _client.Fingerprint(desired.ToJsonString());
     }
 
-    private async Task<string> LaunchOrRecoverAsync(RailwayResolvedTarget target, string serviceId, bool initial, string desiredFingerprint,
-        RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, Stopwatch overall, CancellationToken cancellationToken)
+    private async Task<string> LaunchOrRecoverAsync(RailwayResolvedTarget target, string serviceId, string desiredFingerprint,
+        RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, Stopwatch overall, JsonObject? patch, CancellationToken cancellationToken)
     {
         JsonObject attempt;
         if (identity["deploymentAttempt"] is JsonObject recorded)
         {
             attempt = recorded;
+            if (!(bool)attempt["sent"]!)
+            {
+                HashSet<string> before = await ReadDeploymentIdsAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
+                attempt["baseline"] = new JsonArray([.. before.Order(StringComparer.Ordinal).Select(id => JsonValue.Create(id))]);
+                attempt["requestId"] ??= JsonValue.Create(Guid.NewGuid().ToString("N"));
+                await saveIdentity().ConfigureAwait(false);
+            }
         }
         else
         {
@@ -285,8 +300,9 @@ internal sealed class RailwayServiceReconciler
             {
                 ["desiredFingerprint"] = desiredFingerprint,
                 ["baseline"] = new JsonArray([.. before.Order(StringComparer.Ordinal).Select(id => JsonValue.Create(id))]),
-                ["initial"] = initial,
                 ["sent"] = false,
+                ["operation"] = "patch",
+                ["requestId"] = Guid.NewGuid().ToString("N"),
             };
             identity["deploymentAttempt"] = attempt;
             await saveIdentity().ConfigureAwait(false);
@@ -298,6 +314,9 @@ internal sealed class RailwayServiceReconciler
             string? deploymentId = await DiscoverInitialDeploymentAsync(target, serviceId, baseline, (string?)attempt["id"], cancellationToken).ConfigureAwait(false);
             if (deploymentId is not null)
             {
+                if (!(bool)attempt["sent"]!)
+                { throw new InvalidOperationException("An unexpected Railway deployment appeared before the recorded request. Reconcile concurrent changes before retrying."); }
+                await ValidateDeploymentRequestAsync(target, serviceId, deploymentId, attempt, cancellationToken).ConfigureAwait(false);
                 attempt["id"] = deploymentId;
                 await saveIdentity().ConfigureAwait(false);
                 return deploymentId;
@@ -309,26 +328,24 @@ internal sealed class RailwayServiceReconciler
                 continue;
             }
 
+            if (patch is null || (string?)attempt["requestId"] is not string requestId)
+            { throw new InvalidOperationException("The recorded configuration deployment requires its desired patch and request marker before it can be retried."); }
+            JsonObject servicePatch = patch["services"]![serviceId]!.AsObject();
+            JsonObject patchVariables = servicePatch["variables"]!.AsObject();
+            attempt["managedVariables"] = new JsonArray([.. patchVariables.Where(variable => variable.Value is not null).Select(variable => JsonValue.Create(variable.Key))]);
+            patchVariables["PINGUAPPS_DEPLOYMENT_REQUEST"] = new JsonObject { ["value"] = requestId, ["isSealed"] = false };
             attempt["sent"] = true;
             await saveIdentity().ConfigureAwait(false);
             try
             {
-                JsonObject deployed = await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeployV2(serviceId:$service,environmentId:$environment)}",
-                    new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-                attempt["id"] = (string)deployed["serviceInstanceDeployV2"]!;
+                JsonObject committed = await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:false)}",
+                    new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
+                attempt["patchId"] = (string?)committed["environmentPatchCommit"];
                 await saveIdentity().ConfigureAwait(false);
-            }
-            catch (RailwayDeploymentNotFoundException)
-            {
-                attempt["sent"] = false;
-                await saveIdentity().ConfigureAwait(false);
-                if (!(bool)attempt["initial"]!)
-                { throw; }
-                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
             }
             catch (RailwayDeploymentRejectedException)
             {
-                attempt["sent"] = false;
+                identity.Remove("deploymentAttempt");
                 await saveIdentity().ConfigureAwait(false);
                 throw;
             }
@@ -393,6 +410,29 @@ internal sealed class RailwayServiceReconciler
         }
 
         return expectedId ?? added.SingleOrDefault();
+    }
+
+    private async Task ValidateDeploymentRequestAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, JsonObject attempt, CancellationToken cancellationToken)
+    {
+        if ((string?)attempt["requestId"] is not string requestId)
+        {
+            if ((string?)attempt["id"] != deploymentId)
+            { throw new InvalidOperationException("A legacy sent request has no exact recorded deployment identity or marker. Operator reconciliation is required before accepting an observed execution."); }
+            return;
+        }
+        JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId meta} deploymentSnapshot(deploymentId:$id){variables}}",
+            new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
+        JsonNode? deployment = data["deployment"];
+        string? actualPatchId = (string?)deployment?["meta"]?["patchId"];
+        string? expectedPatchId = (string?)attempt["patchId"];
+        if ((string?)deployment?["projectId"] != target.ProjectId || (string?)deployment?["environmentId"] != target.EnvironmentId
+            || (string?)deployment?["serviceId"] != serviceId
+            || (string?)data["deploymentSnapshot"]?["variables"]?["PINGUAPPS_DEPLOYMENT_REQUEST"] != requestId
+            || (expectedPatchId is not null && (actualPatchId is null
+                || (expectedPatchId != actualPatchId && expectedPatchId != $"commitChanges/{target.EnvironmentId}/{actualPatchId}"))))
+        {
+            throw new InvalidOperationException("The exact Railway deployment does not prove its association with the recorded configuration request. Reconcile concurrent changes before retrying.");
+        }
     }
 
     private async Task<HashSet<string>> ReadDeploymentIdsAsync(RailwayResolvedTarget target, string serviceId, CancellationToken cancellationToken)
@@ -599,12 +639,12 @@ internal sealed class RailwayServiceReconciler
         return true;
     }
 
-    private async Task WaitForDeploymentAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, RailwayServiceOptions options, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task WaitForDeploymentAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, string image, RailwayServiceOptions options, TimeSpan timeout, CancellationToken cancellationToken)
     {
         Stopwatch timer = Stopwatch.StartNew();
         while (timer.Elapsed < timeout)
         {
-            JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId status deploymentStopped instances{id status}}}",
+            JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId status meta deploymentStopped instances{id status}}}",
                 new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
             JsonNode deployment = data["deployment"]!;
             if ((string?)deployment["projectId"] != target.ProjectId || (string?)deployment["environmentId"] != target.EnvironmentId || (string?)deployment["serviceId"] != serviceId)
@@ -613,6 +653,13 @@ internal sealed class RailwayServiceReconciler
             }
 
             string status = (string)deployment["status"]!;
+            string? deployedImage = (string?)deployment["meta"]?["image"];
+            if ((deployedImage is not null && deployedImage != image)
+                || ((status is "SUCCESS" or "SLEEPING") && deployedImage is null))
+            {
+                throw new InvalidOperationException("The exact Railway deployment does not prove the requested retained image. Reconcile its recorded execution before requesting another process.");
+            }
+
             string[] instances = [.. deployment["instances"]!.AsArray().Select(instance => (string)instance!["status"]!)];
             bool finite = options.WaitForCompletion;
             if (status is "FAILED" or "CRASHED" or "REMOVED" or "REMOVING" or "SKIPPED" or "NEEDS_APPROVAL"
