@@ -66,6 +66,18 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
+    public async Task UnchangedFiniteInvocationForcesOneRealConfigurationChange()
+    {
+        using Provider provider = new() { InstanceStatus = "EXITED", Stopped = true };
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
+        JsonObject identity = [];
+        await ApplyAsync(provider, options, identity);
+        await ApplyAsync(provider, options, identity);
+        Assert.Equal(2, provider.AcceptedRequestMarkers.Count);
+        Assert.NotEqual(provider.AcceptedRequestMarkers[0], provider.AcceptedRequestMarkers[1]);
+    }
+
+    [Fact]
     public async Task LostChangedConfigurationResponseRecoversWithoutAnotherPatch()
     {
         using Provider provider = new() { InstanceStatus = "EXITED", Stopped = true };
@@ -74,10 +86,12 @@ public sealed class ReconciliationContractTests
         await ApplyAsync(provider, options, identity);
         provider.LoseNextDeployResponse = true;
         await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity, UpdatedImage));
+        string requestId = (string)identity["deploymentAttempt"]!["requestId"]!;
         RailwayServiceResult recovered = await ApplyAsync(provider, options, identity, UpdatedImage);
         Assert.Equal("deployment-2", recovered.DeploymentId);
         Assert.Equal(UpdatedImage, provider.DeployedImage);
         Assert.Equal(2, provider.DeployRequests);
+        Assert.Equal(requestId, provider.AcceptedRequestMarkers[^1]);
     }
 
     [Fact]
@@ -606,6 +620,8 @@ public sealed class ReconciliationContractTests
         private readonly JsonArray _deploymentIds = [];
         private readonly Dictionary<string, string?> _deploymentImages = new(StringComparer.Ordinal);
         private JsonObject _deploySettings = [];
+        private JsonNode? _lastCommittedPatch;
+        internal List<string> AcceptedRequestMarkers { get; } = [];
         internal JsonNode? LastPatch { get; private set; }
         internal JsonObject Regions { get; private set; } = new() { ["sfo"] = new JsonObject { ["numReplicas"] = 1 } };
         internal string Status { get; set; } = "SUCCESS";
@@ -720,6 +736,7 @@ public sealed class ReconciliationContractTests
                 }
 
                 JsonNode patch = args["patch"]!["services"]!["service"]!;
+                bool changed = !JsonNode.DeepEquals(_lastCommittedPatch, patch);
                 LastPatch = patch.DeepClone();
                 if (patch["source"] is not null)
                 { _service!["source"] = patch["source"]!.DeepClone(); }
@@ -753,7 +770,7 @@ public sealed class ReconciliationContractTests
                     }
                 }
 
-                if (query.Contains("skipDeploys:false", StringComparison.Ordinal))
+                if (query.Contains("skipDeploys:false", StringComparison.Ordinal) && changed)
                 { return Deploy("environmentPatchCommit", fromSource: true); }
                 data["environmentPatchCommit"] = "patch";
             }
@@ -793,6 +810,8 @@ public sealed class ReconciliationContractTests
                 return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "provider-secret" }) });
             }
             LastDeployWasFromSource = fromSource;
+            _lastCommittedPatch = LastPatch?.DeepClone();
+            AcceptedRequestMarkers.Add((string?)LastPatch?["variables"]?["PINGUAPPS_DEPLOYMENT_REQUEST"]?["value"] ?? string.Empty);
             string id = _deploymentIds.Count == 0 ? "deployment" : $"deployment-{_deploymentIds.Count + 1}";
             _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = id } });
             DeployedImage = ForcedDeploymentImage ?? (fromSource ? (string?)_service!["source"]?["image"] : DeployedImage ?? (string?)_service!["source"]?["image"]);

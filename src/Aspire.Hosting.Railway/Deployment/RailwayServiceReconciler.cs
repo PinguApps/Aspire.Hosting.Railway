@@ -153,8 +153,11 @@ internal sealed class RailwayServiceReconciler
         bool volumesChanged = await EnsureVolumesAsync(target, environment, serviceId, options, identity, saveIdentity, cancellationToken).ConfigureAwait(false);
         bool domainsChanged = await EnsureDomainsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
         bool limitsChanged = await EnsureLimitsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
+        string? deploymentId = (string?)instance["latestDeployment"]?["id"];
+        bool deploy = created || settingsChanged || variablesChanged || volumesChanged || domainsChanged || limitsChanged
+            || deploymentId is null || options.WaitForCompletion || pending;
         JsonObject? deploymentPatch = null;
-        if (variablesChanged || settingsChanged || (string?)identity["deploymentAttempt"]?["operation"] == "patch")
+        if (deploy)
         {
             JsonObject patchService = [];
             JsonNode? source = settings["source"];
@@ -175,31 +178,25 @@ internal sealed class RailwayServiceReconciler
 
             patchService["deploy"] = settings;
 
-            if (variablesChanged)
+            JsonObject patchVariables = [];
+            foreach (KeyValuePair<string, string> variable in variables)
             {
-                JsonObject patchVariables = [];
-                foreach (KeyValuePair<string, string> variable in variables)
-                {
-                    patchVariables[variable.Key] = new JsonObject { ["value"] = variable.Value, ["isSealed"] = options.SealedVariables.Contains(variable.Key, StringComparer.Ordinal) };
-                }
-
-                foreach (string name in removedVariables)
-                {
-                    patchVariables[name] = null;
-                }
-
-                patchService["variables"] = patchVariables;
+                patchVariables[variable.Key] = new JsonObject { ["value"] = variable.Value, ["isSealed"] = options.SealedVariables.Contains(variable.Key, StringComparer.Ordinal) };
             }
+
+            foreach (string name in removedVariables)
+            {
+                patchVariables[name] = null;
+            }
+
+            patchService["variables"] = patchVariables;
 
             deploymentPatch = new() { ["services"] = new JsonObject { [serviceId] = patchService } };
         }
 
-        string? deploymentId = (string?)instance["latestDeployment"]?["id"];
-        bool deploy = created || settingsChanged || variablesChanged || volumesChanged || domainsChanged || limitsChanged
-            || deploymentId is null || options.WaitForCompletion || pending;
         if (deploy)
         {
-            deploymentId = await LaunchOrRecoverAsync(target, serviceId, deploymentId is null, desiredFingerprint, options,
+            deploymentId = await LaunchOrRecoverAsync(target, serviceId, desiredFingerprint, options,
                 identity, saveIdentity, overall, deploymentPatch, cancellationToken).ConfigureAwait(false);
         }
 
@@ -274,7 +271,7 @@ internal sealed class RailwayServiceReconciler
         return _client.Fingerprint(desired.ToJsonString());
     }
 
-    private async Task<string> LaunchOrRecoverAsync(RailwayResolvedTarget target, string serviceId, bool initial, string desiredFingerprint,
+    private async Task<string> LaunchOrRecoverAsync(RailwayResolvedTarget target, string serviceId, string desiredFingerprint,
         RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, Stopwatch overall, JsonObject? patch, CancellationToken cancellationToken)
     {
         JsonObject attempt;
@@ -289,9 +286,9 @@ internal sealed class RailwayServiceReconciler
             {
                 ["desiredFingerprint"] = desiredFingerprint,
                 ["baseline"] = new JsonArray([.. before.Order(StringComparer.Ordinal).Select(id => JsonValue.Create(id))]),
-                ["initial"] = initial,
                 ["sent"] = false,
-                ["operation"] = patch is null ? "deploy" : "patch",
+                ["operation"] = "patch",
+                ["requestId"] = Guid.NewGuid().ToString("N"),
             };
             identity["deploymentAttempt"] = attempt;
             await saveIdentity().ConfigureAwait(false);
@@ -320,30 +317,15 @@ internal sealed class RailwayServiceReconciler
             await saveIdentity().ConfigureAwait(false);
             try
             {
-                if ((string?)attempt["operation"] == "patch")
-                {
-                    if (patch is null)
-                    { throw new InvalidOperationException("The recorded configuration deployment requires its desired patch before it can be retried."); }
-                    await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:false)}",
-                        new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    JsonObject deployed = await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeploy(serviceId:$service,environmentId:$environment,latestCommit:true)}",
-                        new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-                    if ((bool?)deployed["serviceInstanceDeploy"] == false)
-                    { throw new RailwayDeploymentRejectedException(); }
-                    if ((bool?)deployed["serviceInstanceDeploy"] != true)
-                    { throw new InvalidOperationException("Railway did not confirm acceptance of the source deployment request. Reconcile the recorded request before retrying."); }
-                }
-            }
-            catch (RailwayDeploymentNotFoundException)
-            {
-                attempt["sent"] = false;
+                if (patch is null || (string?)attempt["requestId"] is not string requestId)
+                { throw new InvalidOperationException("The recorded configuration deployment requires its desired patch and request marker before it can be retried."); }
+                JsonObject servicePatch = patch["services"]![serviceId]!.AsObject();
+                JsonObject patchVariables = servicePatch["variables"]!.AsObject();
+                patchVariables["PINGUAPPS_DEPLOYMENT_REQUEST"] = new JsonObject { ["value"] = requestId, ["isSealed"] = false };
+                JsonObject committed = await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:false)}",
+                    new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
+                attempt["patchId"] = (string?)committed["environmentPatchCommit"];
                 await saveIdentity().ConfigureAwait(false);
-                if (!(bool)attempt["initial"]!)
-                { throw; }
-                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
             }
             catch (RailwayDeploymentRejectedException)
             {

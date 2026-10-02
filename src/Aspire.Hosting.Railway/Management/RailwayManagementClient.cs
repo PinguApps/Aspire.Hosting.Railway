@@ -42,13 +42,8 @@ internal sealed class RailwayManagementClient
 
         JsonObject body = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Railway returned an empty control-plane response.");
-        if (body["errors"] is JsonArray { Count: > 0 } errors)
+        if (body["errors"] is JsonArray { Count: > 0 })
         {
-            if (operation is "serviceInstanceDeployV2" or "serviceInstanceDeploy" && errors.All(error => (string?)error?["message"] == "Deployment not found"))
-            {
-                throw new RailwayDeploymentNotFoundException();
-            }
-
             if (operation is "serviceInstanceDeployV2" or "serviceInstanceDeploy" or "environmentPatchCommit")
             {
                 throw new RailwayDeploymentRejectedException();
@@ -113,14 +108,6 @@ internal sealed class RailwayManagementClient
             "query($project:String!,$environment:String!,$service:String){variables(projectId:$project,environmentId:$environment,serviceId:$service,unrendered:true)}",
             new { project = target.ProjectId, environment = target.EnvironmentId, service = serviceId }, cancellationToken).ConfigureAwait(false);
         return data["variables"]!.AsObject();
-    }
-}
-
-[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "This internal transport condition deliberately accepts no provider message or credentials.")]
-internal sealed class RailwayDeploymentNotFoundException : InvalidOperationException
-{
-    internal RailwayDeploymentNotFoundException() : base("Railway has not yet established its initial deployment.")
-    {
     }
 }
 
