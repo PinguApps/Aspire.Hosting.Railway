@@ -14,6 +14,10 @@ public sealed class RailwayTargetResource : Resource
         ArgumentNullException.ThrowIfNull(apiToken);
         ArgumentNullException.ThrowIfNull(siteKey);
         ArgumentNullException.ThrowIfNull(options);
+        if (!apiToken.Secret)
+        {
+            throw new ArgumentException("Railway control-plane token parameters must be secret.", nameof(apiToken));
+        }
         ProjectId = projectId;
         EnvironmentId = environmentId;
         ApiToken = apiToken;
