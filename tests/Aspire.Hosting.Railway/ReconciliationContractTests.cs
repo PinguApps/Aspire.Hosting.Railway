@@ -11,6 +11,106 @@ public sealed class ReconciliationContractTests
     private const string Image = "ghcr.io/pinguapps/test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string UpdatedImage = "ghcr.io/pinguapps/test@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    [Theory]
+    [InlineData("deployment")]
+    [InlineData("project")]
+    [InlineData("environment")]
+    [InlineData("service")]
+    [InlineData("meta")]
+    [InlineData("patch")]
+    [InlineData("snapshot")]
+    [InlineData("variables")]
+    [InlineData("marker")]
+    public async Task MissingCorrelationFieldWaitsForTheSameDeploymentWithoutAnotherRequest(string field)
+    {
+        using Provider provider = new() { MissingCorrelationField = field, MissingCorrelationResponses = 1 };
+        RailwayServiceResult result = await ApplyAsync(provider, new(), []);
+        Assert.Equal("deployment", result.DeploymentId);
+        Assert.Equal(["deployment", "deployment"], provider.CorrelationReadIds);
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Theory]
+    [InlineData("project")]
+    [InlineData("environment")]
+    [InlineData("service")]
+    [InlineData("patch")]
+    [InlineData("marker")]
+    public async Task PresentCorrelationMismatchFailsImmediatelyEvenWhenAnotherFieldIsMissing(string field)
+    {
+        using Provider provider = new() { WrongCorrelationField = field, MissingCorrelationField = field == "marker" ? "patch" : "marker", MissingCorrelationResponses = int.MaxValue };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), []));
+        Assert.Single(provider.CorrelationReadIds);
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Theory]
+    [InlineData("deployment")]
+    [InlineData("project")]
+    [InlineData("environment")]
+    [InlineData("service")]
+    [InlineData("meta")]
+    [InlineData("patch")]
+    [InlineData("snapshot")]
+    [InlineData("variables")]
+    [InlineData("marker")]
+    public async Task UnavailableCorrelationTimesOutAndResumesWithoutAnotherFiniteExecution(string field)
+    {
+        using Provider provider = new() { MissingCorrelationField = field, MissingCorrelationResponses = int.MaxValue, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never, DeploymentTimeout = TimeSpan.FromSeconds(1.5) };
+        TimeoutException error = await Assert.ThrowsAsync<TimeoutException>(() => ApplyAsync(provider, options, identity));
+        Assert.Contains("association", error.Message, StringComparison.Ordinal);
+        Assert.True((bool)identity["deploymentAttempt"]!["sent"]!);
+        Assert.Null(identity["deploymentAttempt"]!["id"]);
+        provider.MissingCorrelationResponses = 0;
+        options.DeploymentTimeout = TimeSpan.FromSeconds(5);
+        RailwayServiceResult resumed = await ApplyAsync(provider, options, identity);
+        Assert.Equal("deployment", resumed.DeploymentId);
+        Assert.All(provider.CorrelationReadIds, id => Assert.Equal("deployment", id));
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task CancellationWhileCorrelationIsUnavailablePreservesTheSentAttempt()
+    {
+        using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using Provider provider = new() { MissingCorrelationField = "marker", MissingCorrelationResponses = int.MaxValue, CorrelationRead = cancellation.Cancel, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
+        using HttpClient httpClient = new(provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, cancellation.Token));
+        Assert.True((bool)identity["deploymentAttempt"]!["sent"]!);
+        provider.CorrelationRead = null;
+        provider.MissingCorrelationResponses = 0;
+        await ApplyAsync(provider, options, identity);
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InFlightCorrelationReadCannotExceedTheRemainingDeadlineOrResend(bool ignoreCancellation)
+    {
+        using Provider provider = new() { CorrelationDelay = TimeSpan.FromSeconds(30), IgnoreCorrelationCancellation = ignoreCancellation, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never, DeploymentTimeout = TimeSpan.FromSeconds(1.5) };
+        using CancellationTokenSource outerBound = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        outerBound.CancelAfter(TimeSpan.FromSeconds(5));
+        using HttpClient httpClient = new(provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        TimeoutException error = await Assert.ThrowsAsync<TimeoutException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, outerBound.Token));
+        Assert.Contains("association", error.Message, StringComparison.Ordinal);
+        Assert.False(outerBound.IsCancellationRequested);
+        Assert.Single(provider.CorrelationReadIds);
+        Assert.True((bool)identity["deploymentAttempt"]!["sent"]!);
+        provider.CorrelationDelay = TimeSpan.Zero;
+        options.DeploymentTimeout = TimeSpan.FromSeconds(5);
+        await ApplyAsync(provider, options, identity);
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
     [Fact]
     public async Task ScopedCommitQueueReferenceCorrelatesWithTheDeploymentPatchId()
     {
@@ -746,6 +846,13 @@ public sealed class ReconciliationContractTests
         internal bool OmitReportedImage { get; set; }
         internal bool WrongRequestMarker { get; set; }
         internal bool ReturnCompositePatchReference { get; set; }
+        internal string? MissingCorrelationField { get; set; }
+        internal int MissingCorrelationResponses { get; set; }
+        internal string? WrongCorrelationField { get; set; }
+        internal Action? CorrelationRead { get; set; }
+        internal List<string> CorrelationReadIds { get; } = [];
+        internal TimeSpan CorrelationDelay { get; set; }
+        internal bool IgnoreCorrelationCancellation { get; set; }
         internal string? DeployedImage { get; private set; }
         internal bool LastDeployWasFromSource { get; private set; }
         private readonly JsonArray _deploymentIds = [];
@@ -932,10 +1039,67 @@ public sealed class ReconciliationContractTests
                     : throw new InvalidOperationException($"Unexpected test operation: {query}");
                 if (query.Contains("deploymentSnapshot", StringComparison.Ordinal))
                 {
+                    CorrelationReadIds.Add((string)args["id"]!);
+                    await Task.Delay(CorrelationDelay, IgnoreCorrelationCancellation ? CancellationToken.None : cancellationToken);
                     string marker = _deploymentMarkers.GetValueOrDefault((string)args["id"]!) ?? string.Empty;
                     if (WrongRequestMarker)
                     { marker = "unrelated-operator-request"; }
                     data["deploymentSnapshot"] = new JsonObject { ["variables"] = new JsonObject { ["PINGUAPPS_DEPLOYMENT_REQUEST"] = marker } };
+                    if (MissingCorrelationResponses > 0)
+                    {
+                        MissingCorrelationResponses--;
+                        switch (MissingCorrelationField)
+                        {
+                            case "deployment":
+                                data["deployment"] = null;
+                                break;
+                            case "project":
+                                data["deployment"]!["projectId"] = null;
+                                break;
+                            case "environment":
+                                data["deployment"]!["environmentId"] = null;
+                                break;
+                            case "service":
+                                data["deployment"]!["serviceId"] = null;
+                                break;
+                            case "meta":
+                                data["deployment"]!["meta"] = null;
+                                break;
+                            case "patch":
+                                data["deployment"]!["meta"]!["patchId"] = null;
+                                break;
+                            case "snapshot":
+                                data["deploymentSnapshot"] = null;
+                                break;
+                            case "variables":
+                                data["deploymentSnapshot"]!["variables"] = null;
+                                break;
+                            case "marker":
+                                data["deploymentSnapshot"]!["variables"]!["PINGUAPPS_DEPLOYMENT_REQUEST"] = null;
+                                break;
+                        }
+                    }
+
+                    switch (WrongCorrelationField)
+                    {
+                        case "project":
+                            data["deployment"]!["projectId"] = "unrelated-project";
+                            break;
+                        case "environment":
+                            data["deployment"]!["environmentId"] = "unrelated-environment";
+                            break;
+                        case "service":
+                            data["deployment"]!["serviceId"] = "unrelated-service";
+                            break;
+                        case "patch":
+                            data["deployment"]!["meta"]!["patchId"] = "unrelated-patch";
+                            break;
+                        case "marker":
+                            data["deploymentSnapshot"]!["variables"]!["PINGUAPPS_DEPLOYMENT_REQUEST"] = "unrelated-request";
+                            break;
+                    }
+
+                    CorrelationRead?.Invoke();
                 }
             }
 
