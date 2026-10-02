@@ -10,6 +10,8 @@ A definitively rejected patch clears its request attempt so the next explicit in
 
 For marker-bearing attempts, the candidate's deployment snapshot must contain that exact marker; the returned patch identity must also match its metadata when available. An unrelated same-image operator deployment cannot satisfy the request. The reserved marker name is rejected in AppHost runtime input. Managed variable names are recorded before a request so an ordinary changed-intent retry can remove variables introduced by an uncertain accepted patch. Unchanged cron activation is still checked for scope, status, and the requested image without waiting for its next scheduled execution.
 
+Railway can expose a deployment before its snapshot request marker is readable. Missing scope or association fields are polled for that same candidate ID within the original deployment deadline. A present but incorrect scope, marker, or patch identity fails immediately, even when another field is missing. Timeout or cancellation preserves the sent attempt; polling never issues another configuration request. See [correlation readiness validation](correlation-validation.md) for the observed missing-to-matching transition and regression coverage.
+
 Markerless legacy sent attempts can resume an already recorded exact deployment ID and must still pass the requested-image guard. A sent legacy attempt without that ID requires operator reconciliation; a new candidate discovered from its baseline cannot prove which request created it.
 
 Pending state is saved before configuration writes. Interrupted application retries the recorded service. Destructive external changes cause failure rather than name-based replacement.
