@@ -27,6 +27,17 @@ public sealed class ReconciliationContractTests
         Assert.Equal(0, provider.Mutations);
     }
 
+    [Fact]
+    public async Task NewServiceUnsupportedRegionFailsBeforeAnyMutation()
+    {
+        using Provider provider = new();
+        RailwayServiceOptions options = new() { Region = "unsupported" };
+        await Assert.ThrowsAsync<ArgumentException>(() => PreflightAsync(provider, options, []));
+        await Assert.ThrowsAsync<ArgumentException>(() => ApplyAsync(provider, options, []));
+        Assert.Equal(0, provider.Mutations);
+        Assert.Equal(0, provider.Creates);
+    }
+
     [Theory]
     [InlineData(RailwayOwnershipMode.CreateOnly)]
     [InlineData(RailwayOwnershipMode.ExistingOnly)]

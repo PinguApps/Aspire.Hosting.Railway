@@ -15,6 +15,8 @@ internal sealed class RailwayServiceReconciler
 
     internal async Task<string> PreflightAsync(RailwayResolvedTarget target, string resourceName, string serviceName, string image, RailwayServiceOptions options, JsonObject identity, CancellationToken cancellationToken)
     {
+        RailwayServiceValidation.Validate(options);
+        RailwayServiceValidation.ValidateImage(image);
         await _client.ValidateScopeAsync(target, cancellationToken).ConfigureAwait(false);
         ValidateCachedScope(identity, target, serviceName);
         JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
@@ -56,6 +58,8 @@ internal sealed class RailwayServiceReconciler
         IReadOnlyDictionary<string, string>? sealedFingerprints = null)
     {
         Stopwatch overall = Stopwatch.StartNew();
+        RailwayServiceValidation.Validate(options);
+        RailwayServiceValidation.ValidateImage(image);
         await _client.ValidateScopeAsync(target, cancellationToken).ConfigureAwait(false);
         ValidateCachedScope(identity, target, serviceName);
         JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
@@ -633,7 +637,7 @@ internal sealed class RailwayServiceReconciler
         throw new TimeoutException($"Railway deployment '{deploymentId}' exceeded its completion deadline.");
     }
 
-    private static string ResolveRegion(string region)
+    internal static string ResolveRegion(string region)
     {
         if (region is "ams" or "europe-west4-drams3a" or "europe-west4")
         {

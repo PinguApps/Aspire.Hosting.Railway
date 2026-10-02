@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Aspire.Hosting.Railway.Deployment;
 
 namespace Aspire.Hosting.Railway;
 
@@ -37,6 +38,11 @@ internal static partial class RailwayServiceValidation
         if (options.Image is not null)
         {
             ValidateImage(options.Image);
+        }
+
+        if (options.Region is string region)
+        {
+            RailwayServiceReconciler.ResolveRegion(region);
         }
 
         if (options.CustomDomains.Any(domain => string.IsNullOrWhiteSpace(domain) || domain.EndsWith('.')
