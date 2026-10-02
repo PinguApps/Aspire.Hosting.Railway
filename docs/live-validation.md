@@ -33,12 +33,12 @@ The [public web endpoint](https://web-production-62a0b5.up.railway.app) returned
 | `StartCommand`, restart policy/retries, finite completion, cron and dependencies | Core contract tests plus the companion Jobs package's separate packed live consumer: successful stopped `EXITED` process, exit-7 `CRASHED` instance despite outer `SUCCESS`, dependent web gating, timeout and real scheduled execution. See that repository's live report for its exact evidence. |
 | RabbitMQ connection expressions and private dependencies | Core reference-resolution tests plus companion RabbitMQ live AMQP/private-host/special-character credential tests. Its report records broker/proxy and durable-queue verification. |
 | `CustomDomains` | Configuration/validation and drift contracts only. No external DNS zone was configured; DNS and TLS readiness remain operator prerequisites. |
-| `SleepApplication` | Desired configuration serialization is covered; actual inactivity/sleep/wake timing was not observed. |
+| `SleepApplication` | Configuration and accepting an explicitly sleeping ordinary service on repeat deployment are contract-tested; finite jobs cannot pass in SLEEPING. Actual inactivity/sleep/wake timing was not observed. |
 | Explicit Bearer account mode | Available only with expected project/workspace identity. The mandatory live consumer used project-token mode; account-mode deployment was not live-tested. |
 | Credential rotation | Live invalid current token overrides cached valid token and is refused. A replacement valid scoped token was not generated solely for this test. Registry/sealed fingerprint changes are contract-tested. |
 | TypeScript DTOs and exports | Packed-NuGet fixture restored generated SDK code, typechecked, and generated publish/deploy graphs with web-to-worker ordering. TypeScript did not separately deploy live infrastructure. |
 
-Normal validation: 56 non-live tests passed, with a warning-free Release build. The optional live scope test also passed against the allocated project/environment/site. The packed TypeScript gate passed using the same source. Secrets, raw deployment state and provider error payloads are not committed.
+Normal validation: 60 non-live tests passed, with a warning-free Release build. The optional live scope test also passed against the allocated project/environment/site. The packed TypeScript gate passed using the same source. Secrets, raw deployment state and provider error payloads are not committed.
 
 ## Repository setup
 
@@ -46,4 +46,5 @@ Normal validation: 56 non-live tests passed, with a warning-free Release build. 
 - Configure `NUGET_USER` and a NuGet trusted publishing policy for this repository's `publish.yml` workflow. Initial package publication remains a maintainer action.
 - Optional read-only live scope CI needs `RAILWAY_API_TOKEN`, `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, and `RAILWAY_SITE_KEY`. The project must already contain the matching shared `PINGUAPPS_SITE_KEY` marker. This CI check verifies scope; it does not recreate the full live consumer.
 - AppHost deployments need an environment-scoped project token and explicit current allocation parameters. Private registry credentials and runtime secrets are separate inputs. No deployment credentials are required for ordinary unit tests or the packed TypeScript gate.
+
 
