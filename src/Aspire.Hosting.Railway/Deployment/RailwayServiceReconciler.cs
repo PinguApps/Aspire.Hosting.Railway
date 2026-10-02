@@ -329,7 +329,7 @@ internal sealed class RailwayServiceReconciler
             }
             catch (RailwayDeploymentRejectedException)
             {
-                attempt["sent"] = false;
+                identity.Remove("deploymentAttempt");
                 await saveIdentity().ConfigureAwait(false);
                 throw;
             }

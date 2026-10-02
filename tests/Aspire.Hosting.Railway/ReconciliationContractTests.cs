@@ -206,6 +206,22 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
+    public async Task RejectedFiniteRequestAllowsFreshIntentAfterOperatorDeployment()
+    {
+        using Provider provider = new() { FailNextDeploy = true, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Null(identity["deploymentAttempt"]);
+        provider.CreateOperatorDeployment();
+        int requests = provider.DeployRequests;
+        RailwayServiceResult result = await ApplyAsync(provider, options, identity, UpdatedImage);
+        Assert.Equal("deployment-2", result.DeploymentId);
+        Assert.Equal(UpdatedImage, provider.DeployedImage);
+        Assert.Equal(requests + 1, provider.DeployRequests);
+    }
+
+    [Fact]
     public async Task LostLaterFiniteResponseRecoversItsExactDeploymentWithoutExecutingTwice()
     {
         using Provider provider = new() { Status = "SUCCESS", InstanceStatus = "EXITED", Stopped = true };
@@ -639,6 +655,11 @@ public sealed class ReconciliationContractTests
         internal void SetUnmanagedVariable(string name, string value) => _variables[name] = value;
 
         internal void SetConfiguredImage(string image) => _service!["source"] = new JsonObject { ["image"] = image };
+
+        internal void CreateOperatorDeployment()
+        {
+            using HttpResponseMessage response = Deploy("environmentPatchCommit", fromSource: true);
+        }
 
         internal void CreateService(bool marked)
         {
