@@ -1,6 +1,6 @@
 # Live validation
 
-The initial 1.0.0 report below covered provisioning and unchanged reconciliation. Image updates subsequently exposed a provider source-selection bug; see [the 1.0.1 image-update validation](image-update-validation.md) for the correction and separate A-to-B evidence.
+The initial 1.0.0 report below covered provisioning and unchanged reconciliation. Image updates subsequently exposed a provider source-selection bug; see [the 1.0.1 image-update validation](image-update-validation.md) for the correction and separate A-to-B evidence. The historical bounded `Deployment not found` retry described below applies to 1.0.0 only; 1.0.1 uses atomic configuration deployment and fails immediately on a rejected configuration patch.
 
 Validated on 2 October 2026 with .NET 10.0.401, Aspire CLI/SDK 13.6.0, and a packed `PinguApps.Aspire.Hosting.Railway` 1.0.0 package. The consumer was outside this repository at `V:/pin646-core-consumer`, with a fresh isolated NuGet cache for each package revision. No package was published.
 
