@@ -50,7 +50,7 @@ internal sealed class RailwayManagementClient
 
     private static string GetOperationName(string query)
     {
-        string[] operations = ["environmentPatchCommit", "serviceCreate", "serviceInstanceDeployV2", "volumeCreate", "serviceDomainCreate", "customDomainCreate", "serviceInstanceLimitsUpdate", "serviceInstanceLimits", "projectToken", "variables", "domains", "deployment", "environment", "project"];
+        string[] operations = ["environmentPatchCommit", "serviceCreate", "serviceInstanceDeployV2", "serviceInstanceDeploy", "serviceInstanceUpdate", "volumeCreate", "serviceDomainCreate", "customDomainCreate", "serviceInstanceLimitsUpdate", "serviceInstanceLimits", "projectToken", "variables", "domains", "deployment", "environment", "project"];
         return operations.FirstOrDefault(operation => query.Contains(operation, StringComparison.Ordinal)) ?? "unknown";
     }
 

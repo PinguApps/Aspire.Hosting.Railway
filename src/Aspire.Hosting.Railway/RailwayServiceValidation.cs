@@ -27,12 +27,20 @@ internal static partial class RailwayServiceValidation
             throw new ArgumentException("Unsupported Railway ownership or restart policy.", nameof(options));
         }
 
+        if (options.SealedVariables.Any(name => string.IsNullOrWhiteSpace(name) || name.StartsWith("PINGUAPPS_", StringComparison.Ordinal)
+                || name is "RAILWAY_TOKEN" or "RAILWAY_API_TOKEN" or "RAILWAY_API_KEY")
+            || options.SealedVariables.Distinct(StringComparer.Ordinal).Count() != options.SealedVariables.Count)
+        {
+            throw new ArgumentException("Sealed variables must use unique runtime names; ownership markers and control-plane credentials cannot be sealed workload variables.", nameof(options));
+        }
+
         if (options.Image is not null)
         {
             ValidateImage(options.Image);
         }
 
-        if (options.Port is < 1 or > 65535 || options.RestartPolicyMaxRetries < 0 || options.DeploymentTimeout <= TimeSpan.Zero
+        if (options.Port is < 1 or > 65535 || options.RestartPolicyMaxRetries < 0
+            || (options.RestartPolicy != RailwayRestartPolicy.Never && options.RestartPolicyMaxRetries == 0) || options.DeploymentTimeout <= TimeSpan.Zero
             || options.MemoryGB is <= 0 || options.VCpus is <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Ports, resource limits, retries and timeouts must be valid.");

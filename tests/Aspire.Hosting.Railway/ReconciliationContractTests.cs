@@ -119,6 +119,21 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
+    public async Task ExplicitRegionReplacesTheDefaultRatherThanAddingASecondRegion()
+    {
+        using Provider provider = new();
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { Region = "europe-west4-drams3a" };
+        await ApplyAsync(provider, options, identity);
+        Assert.Equal("ams", Assert.Single(provider.Regions).Key);
+        Assert.Equal(1, (int)provider.Regions["ams"]!["numReplicas"]!);
+        Assert.Null(provider.LastPatch?["deploy"]?["multiRegionConfig"]);
+        int mutations = provider.Mutations;
+        Assert.False((await ApplyAsync(provider, options, identity)).Deployed);
+        Assert.Equal(mutations, provider.Mutations);
+    }
+
+    [Fact]
     public async Task MissingCachedIdentityCannotFallBackToName()
     {
         using Provider provider = new();
@@ -174,6 +189,24 @@ public sealed class ReconciliationContractTests
         options.Volumes.Add(new() { MountPath = "/data" });
         await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, Identity()));
         Assert.Equal(0, provider.Mutations);
+    }
+
+    [Fact]
+    public async Task ExistingTcpExposureCannotBeSilentlyAdopted()
+    {
+        using Provider provider = new();
+        provider.CreateService(marked: true);
+        provider.TcpProxies.Add(new JsonObject { ["id"] = "tcp-proxy" });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => PreflightAsync(provider, new(), Identity()));
+        Assert.Equal(0, provider.Mutations);
+    }
+
+    [Fact]
+    public async Task NeverRestartOmitsProviderInvalidZeroRetryConfiguration()
+    {
+        using Provider provider = new();
+        await ApplyAsync(provider, new() { RestartPolicy = RailwayRestartPolicy.Never, RestartPolicyMaxRetries = 0 }, []);
+        Assert.Null(provider.LastPatch?["deploy"]?["restartPolicyMaxRetries"]);
     }
 
     [Theory]
@@ -237,11 +270,13 @@ public sealed class ReconciliationContractTests
         internal bool FailCreateResponse { get; set; }
         internal int DeployRequests { get; private set; }
         internal JsonNode? LastPatch { get; private set; }
+        internal JsonObject Regions { get; private set; } = new() { ["sfo"] = new JsonObject { ["numReplicas"] = 1 } };
         internal string Status { get; set; } = "SUCCESS";
         internal string InstanceStatus { get; set; } = "RUNNING";
         internal bool Stopped { get; set; }
         internal JsonArray Volumes { get; } = [];
         internal JsonArray Domains { get; } = [];
+        internal JsonArray TcpProxies { get; } = [];
         private JsonObject? _service;
         private readonly JsonObject _variables = [];
 
@@ -302,6 +337,7 @@ public sealed class ReconciliationContractTests
             else if (query.Contains("{domains(", StringComparison.Ordinal))
             {
                 data["domains"] = new JsonObject { ["serviceDomains"] = Domains.DeepClone(), ["customDomains"] = new JsonArray() };
+                data["tcpProxies"] = TcpProxies.DeepClone();
             }
             else if (query.Contains("environmentPatchCommit", StringComparison.Ordinal))
             {
@@ -318,6 +354,7 @@ public sealed class ReconciliationContractTests
                 if (patch["deploy"] is not null)
                 {
                     _service!["latestDeployment"] = new JsonObject { ["id"] = "deployment", ["meta"] = new JsonObject { ["serviceManifest"] = new JsonObject { ["deploy"] = patch["deploy"]!.DeepClone() } } };
+                    _service["latestDeployment"]!["meta"]!["serviceManifest"]!["deploy"]!["multiRegionConfig"] = Regions.DeepClone();
                 }
 
                 if (patch["variables"] is JsonObject variables)
@@ -331,7 +368,12 @@ public sealed class ReconciliationContractTests
 
                 data["environmentPatchCommit"] = "patch";
             }
-            else if (query.Contains("serviceInstanceDeployV2", StringComparison.Ordinal))
+            else if (query.Contains("serviceInstanceUpdate(", StringComparison.Ordinal))
+            {
+                Regions = args["input"]!["multiRegionConfig"]!.DeepClone().AsObject();
+                data["serviceInstanceUpdate"] = true;
+            }
+            else if (query.Contains("serviceInstanceDeploy", StringComparison.Ordinal))
             {
                 DeployRequests++;
                 if (FailNextDeploy)
@@ -339,7 +381,10 @@ public sealed class ReconciliationContractTests
                     FailNextDeploy = false;
                     return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "provider-secret" }) });
                 }
-                data["serviceInstanceDeployV2"] = "deployment";
+                if (query.Contains("serviceInstanceDeployV2", StringComparison.Ordinal))
+                { data["serviceInstanceDeployV2"] = "deployment"; }
+                else
+                { data["serviceInstanceDeploy"] = true; }
             }
             else
             {

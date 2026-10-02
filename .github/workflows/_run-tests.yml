@@ -34,6 +34,8 @@ on:
         required: false
       RAILWAY_ENVIRONMENT_ID:
         required: false
+      RAILWAY_SITE_KEY:
+        required: false
   workflow_dispatch:
     inputs:
       test_filter:
@@ -60,10 +62,13 @@ jobs:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
       RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+      RAILWAY_SITE_KEY: ${{ secrets.RAILWAY_SITE_KEY }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6

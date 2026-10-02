@@ -6,6 +6,10 @@ Settings and runtime variables use a configuration patch with `skipDeploys`, fol
 
 Pending state is saved before configuration writes. Interrupted application retries the recorded service. Destructive external changes cause failure rather than name-based replacement.
 
+Ordinary services must reach `SUCCESS` for the exact launched deployment ID. Finite execution additionally requires `deploymentStopped` and every instance `EXITED`. Failed/crashed deployments are rejected even if instances have exited. A timeout blocks dependent services; it does not imply that the remote process was stopped. Cron executions require `Never` restart and are not awaited as finite release prerequisites.
+
 Existing PostgreSQL, Upstash, and Bunny publishers participate through `push-prereq`. They remain responsible for provider-specific ownership/output generation. Adapting those packages to the full site allocation contract belongs to the later template integration phase.
 
 Retained images do not reverse database migrations. Rollback eligibility, migration compatibility, worker handover, and release recovery remain release policies composed through completion dependencies.
+
+The core publishes projects/containers, including web apps and workers. Jobs, RabbitMQ, and Dashboard companions add workload-specific configuration. OpenObserve deployment remains outside these packages. See [live validation](live-validation.md) for verified behavior and limitations.

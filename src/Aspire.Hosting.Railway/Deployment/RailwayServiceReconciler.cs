@@ -141,20 +141,9 @@ internal sealed class RailwayServiceReconciler
 
                 if (settings["multiRegionConfig"] is JsonObject desiredRegions)
                 {
-                    string[] existingRegions = instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"] is not JsonObject currentRegions ? [] : [.. currentRegions.Select(pair => pair.Key)];
-                    string? defaultRegion = (string?)instance["region"];
-                    if (defaultRegion is not null)
-                    {
-                        existingRegions = [.. existingRegions, defaultRegion];
-                    }
-
-                    foreach (string region in existingRegions.Distinct(StringComparer.Ordinal))
-                    {
-                        if (!desiredRegions.ContainsKey(region))
-                        {
-                            desiredRegions[region] = null;
-                        }
-                    }
+                    await _client.SendAsync("mutation($input:ServiceInstanceUpdateInput!,$service:String!,$environment:String!){serviceInstanceUpdate(input:$input,serviceId:$service,environmentId:$environment)}",
+                        new { input = new { multiRegionConfig = desiredRegions, numReplicas = 1 }, service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
+                    settings.Remove("multiRegionConfig");
                 }
 
                 patchService["deploy"] = settings;
@@ -194,9 +183,32 @@ internal sealed class RailwayServiceReconciler
             || deploymentId is null || options.WaitForCompletion || pending;
         if (deploy)
         {
-            JsonObject deployed = await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeployV2(serviceId:$service,environmentId:$environment)}",
-                new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-            deploymentId = (string)deployed["serviceInstanceDeployV2"]!;
+            if (deploymentId is null)
+            {
+                await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeploy(serviceId:$service,environmentId:$environment)}",
+                    new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
+                Stopwatch discovery = Stopwatch.StartNew();
+                while (deploymentId is null && discovery.Elapsed < options.DeploymentTimeout)
+                {
+                    JsonObject refreshed = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
+                    deploymentId = (string?)FindService(refreshed, serviceName, serviceId)?["latestDeployment"]?["id"];
+                    if (deploymentId is null)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                if (deploymentId is null)
+                {
+                    throw new TimeoutException("Railway did not expose the initial deployment within its completion deadline.");
+                }
+            }
+            else
+            {
+                JsonObject deployed = await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeployV2(serviceId:$service,environmentId:$environment)}",
+                    new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
+                deploymentId = (string)deployed["serviceInstanceDeployV2"]!;
+            }
         }
 
         if (options.CronSchedule is null || deploy)
@@ -288,12 +300,15 @@ internal sealed class RailwayServiceReconciler
             ["source"] = new JsonObject { ["image"] = image },
             ["startCommand"] = options.StartCommand,
             ["restartPolicyType"] = restart,
-            ["restartPolicyMaxRetries"] = options.RestartPolicyMaxRetries,
             ["cronSchedule"] = options.CronSchedule,
             ["healthcheckPath"] = options.HealthCheckPath,
             ["sleepApplication"] = options.SleepApplication,
             ["numReplicas"] = 1,
         };
+        if (options.RestartPolicy != RailwayRestartPolicy.Never)
+        {
+            settings["restartPolicyMaxRetries"] = options.RestartPolicyMaxRetries;
+        }
         if (options.Region is not null)
         {
             string region = ResolveRegion(options.Region);
@@ -371,9 +386,11 @@ internal sealed class RailwayServiceReconciler
 
     private async Task<JsonObject> ReadDomainsAsync(RailwayResolvedTarget target, string serviceId, CancellationToken cancellationToken)
     {
-        JsonObject result = await _client.SendAsync("query($project:String!,$environment:String!,$service:String!){domains(projectId:$project,environmentId:$environment,serviceId:$service){serviceDomains{id domain targetPort} customDomains{id domain targetPort}}}",
+        JsonObject result = await _client.SendAsync("query($project:String!,$environment:String!,$service:String!){domains(projectId:$project,environmentId:$environment,serviceId:$service){serviceDomains{id domain targetPort} customDomains{id domain targetPort}} tcpProxies(environmentId:$environment,serviceId:$service){id}}",
             new { project = target.ProjectId, environment = target.EnvironmentId, service = serviceId }, cancellationToken).ConfigureAwait(false);
-        return result["domains"]!.AsObject();
+        JsonObject domains = result["domains"]!.AsObject();
+        domains["tcpProxies"] = result["tcpProxies"]!.DeepClone();
+        return domains;
     }
 
     private async Task<bool> EnsureDomainsAsync(RailwayResolvedTarget target, string serviceId, RailwayServiceOptions options, CancellationToken cancellationToken)
@@ -407,6 +424,10 @@ internal sealed class RailwayServiceReconciler
     private static void ValidateDomainDrift(JsonObject domains, RailwayServiceOptions options)
     {
         JsonArray serviceDomains = domains["serviceDomains"]!.AsArray();
+        if (domains["tcpProxies"]!.AsArray().Count != 0)
+        {
+            throw new InvalidOperationException("An existing Railway TCP proxy would retain unsupported public exposure. Reconcile it explicitly before deployment.");
+        }
         if ((!options.PublicDomain && serviceDomains.Count != 0) || domains["customDomains"]!.AsArray().Any(domain => !options.CustomDomains.Contains((string)domain!["domain"]!, StringComparer.Ordinal)))
         {
             throw new InvalidOperationException("Railway public domain drift requires operator reconciliation; no public exposure is silently retained or deleted.");
