@@ -423,8 +423,31 @@ internal sealed class RailwayServiceReconciler
         string? expectedPatchId = (string?)attempt["patchId"];
         while (overall.Elapsed < timeout)
         {
-            JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId meta} deploymentSnapshot(deploymentId:$id){variables}}",
-                new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
+            TimeSpan budget = timeout - overall.Elapsed;
+            if (budget <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(budget);
+            JsonObject data;
+            try
+            {
+                data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId meta} deploymentSnapshot(deploymentId:$id){variables}}",
+                    new { id = deploymentId }, deadline.Token).WaitAsync(deadline.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (overall.Elapsed >= timeout)
+            {
+                break;
+            }
+
             JsonNode? deployment = data["deployment"];
             string? project = (string?)deployment?["projectId"];
             string? environment = (string?)deployment?["environmentId"];

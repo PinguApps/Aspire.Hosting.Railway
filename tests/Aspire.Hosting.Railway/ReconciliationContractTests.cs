@@ -88,6 +88,29 @@ public sealed class ReconciliationContractTests
         Assert.Equal(1, provider.DeployRequests);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InFlightCorrelationReadCannotExceedTheRemainingDeadlineOrResend(bool ignoreCancellation)
+    {
+        using Provider provider = new() { CorrelationDelay = TimeSpan.FromSeconds(30), IgnoreCorrelationCancellation = ignoreCancellation, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never, DeploymentTimeout = TimeSpan.FromSeconds(1.5) };
+        using CancellationTokenSource outerBound = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        outerBound.CancelAfter(TimeSpan.FromSeconds(5));
+        using HttpClient httpClient = new(provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        TimeoutException error = await Assert.ThrowsAsync<TimeoutException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, outerBound.Token));
+        Assert.Contains("association", error.Message, StringComparison.Ordinal);
+        Assert.False(outerBound.IsCancellationRequested);
+        Assert.Single(provider.CorrelationReadIds);
+        Assert.True((bool)identity["deploymentAttempt"]!["sent"]!);
+        provider.CorrelationDelay = TimeSpan.Zero;
+        options.DeploymentTimeout = TimeSpan.FromSeconds(5);
+        await ApplyAsync(provider, options, identity);
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
     [Fact]
     public async Task ScopedCommitQueueReferenceCorrelatesWithTheDeploymentPatchId()
     {
@@ -828,6 +851,8 @@ public sealed class ReconciliationContractTests
         internal string? WrongCorrelationField { get; set; }
         internal Action? CorrelationRead { get; set; }
         internal List<string> CorrelationReadIds { get; } = [];
+        internal TimeSpan CorrelationDelay { get; set; }
+        internal bool IgnoreCorrelationCancellation { get; set; }
         internal string? DeployedImage { get; private set; }
         internal bool LastDeployWasFromSource { get; private set; }
         private readonly JsonArray _deploymentIds = [];
@@ -1015,6 +1040,7 @@ public sealed class ReconciliationContractTests
                 if (query.Contains("deploymentSnapshot", StringComparison.Ordinal))
                 {
                     CorrelationReadIds.Add((string)args["id"]!);
+                    await Task.Delay(CorrelationDelay, IgnoreCorrelationCancellation ? CancellationToken.None : cancellationToken);
                     string marker = _deploymentMarkers.GetValueOrDefault((string)args["id"]!) ?? string.Empty;
                     if (WrongRequestMarker)
                     { marker = "unrelated-operator-request"; }
