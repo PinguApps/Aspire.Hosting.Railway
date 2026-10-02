@@ -316,7 +316,7 @@ internal sealed class RailwayServiceReconciler
             {
                 if (!(bool)attempt["sent"]!)
                 { throw new InvalidOperationException("An unexpected Railway deployment appeared before the recorded request. Reconcile concurrent changes before retrying."); }
-                await ValidateDeploymentRequestAsync(target, serviceId, deploymentId, attempt, cancellationToken).ConfigureAwait(false);
+                await ValidateDeploymentRequestAsync(target, serviceId, deploymentId, attempt, overall, options.DeploymentTimeout, cancellationToken).ConfigureAwait(false);
                 attempt["id"] = deploymentId;
                 await saveIdentity().ConfigureAwait(false);
                 return deploymentId;
@@ -412,7 +412,7 @@ internal sealed class RailwayServiceReconciler
         return expectedId ?? added.SingleOrDefault();
     }
 
-    private async Task ValidateDeploymentRequestAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, JsonObject attempt, CancellationToken cancellationToken)
+    private async Task ValidateDeploymentRequestAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, JsonObject attempt, Stopwatch overall, TimeSpan timeout, CancellationToken cancellationToken)
     {
         if ((string?)attempt["requestId"] is not string requestId)
         {
@@ -420,19 +420,41 @@ internal sealed class RailwayServiceReconciler
             { throw new InvalidOperationException("A legacy sent request has no exact recorded deployment identity or marker. Operator reconciliation is required before accepting an observed execution."); }
             return;
         }
-        JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId meta} deploymentSnapshot(deploymentId:$id){variables}}",
-            new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
-        JsonNode? deployment = data["deployment"];
-        string? actualPatchId = (string?)deployment?["meta"]?["patchId"];
         string? expectedPatchId = (string?)attempt["patchId"];
-        if ((string?)deployment?["projectId"] != target.ProjectId || (string?)deployment?["environmentId"] != target.EnvironmentId
-            || (string?)deployment?["serviceId"] != serviceId
-            || (string?)data["deploymentSnapshot"]?["variables"]?["PINGUAPPS_DEPLOYMENT_REQUEST"] != requestId
-            || (expectedPatchId is not null && (actualPatchId is null
-                || (expectedPatchId != actualPatchId && expectedPatchId != $"commitChanges/{target.EnvironmentId}/{actualPatchId}"))))
+        while (overall.Elapsed < timeout)
         {
-            throw new InvalidOperationException("The exact Railway deployment does not prove its association with the recorded configuration request. Reconcile concurrent changes before retrying.");
+            JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId meta} deploymentSnapshot(deploymentId:$id){variables}}",
+                new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
+            JsonNode? deployment = data["deployment"];
+            string? project = (string?)deployment?["projectId"];
+            string? environment = (string?)deployment?["environmentId"];
+            string? service = (string?)deployment?["serviceId"];
+            string? marker = (string?)data["deploymentSnapshot"]?["variables"]?["PINGUAPPS_DEPLOYMENT_REQUEST"];
+            string? actualPatchId = (string?)deployment?["meta"]?["patchId"];
+            if ((project is not null && project != target.ProjectId) || (environment is not null && environment != target.EnvironmentId)
+                || (service is not null && service != serviceId) || (marker is not null && marker != requestId)
+                || (expectedPatchId is not null && actualPatchId is not null
+                    && expectedPatchId != actualPatchId && expectedPatchId != $"commitChanges/{target.EnvironmentId}/{actualPatchId}"))
+            {
+                throw new InvalidOperationException("The exact Railway deployment does not prove its association with the recorded configuration request. Reconcile concurrent changes before retrying.");
+            }
+
+            if (project is not null && environment is not null && service is not null && marker is not null
+                && (expectedPatchId is null || actualPatchId is not null))
+            {
+                return;
+            }
+
+            TimeSpan remaining = timeout - overall.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(500, remaining.TotalMilliseconds)), cancellationToken).ConfigureAwait(false);
         }
+
+        throw new TimeoutException("Railway did not make the exact deployment's request association available within its deadline. No second configuration request was issued; reconcile or resume the recorded attempt.");
     }
 
     private async Task<HashSet<string>> ReadDeploymentIdsAsync(RailwayResolvedTarget target, string serviceId, CancellationToken cancellationToken)
