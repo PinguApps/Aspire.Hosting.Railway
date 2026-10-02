@@ -815,4 +815,3 @@ public sealed class ReconciliationContractTests
         private static HttpResponseMessage Response(JsonObject body) => new(HttpStatusCode.OK) { Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json") };
     }
 }
-

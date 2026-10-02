@@ -157,26 +157,23 @@ internal sealed class RailwayServiceReconciler
         if (variablesChanged || settingsChanged || (string?)identity["deploymentAttempt"]?["operation"] == "patch")
         {
             JsonObject patchService = [];
-            if (settingsChanged || variablesChanged || (string?)identity["deploymentAttempt"]?["operation"] == "patch")
+            JsonNode? source = settings["source"];
+            settings.Remove("source");
+            patchService["source"] = source;
+            settings["registryCredentials"] = registryCredentials?.DeepClone();
+
+            if (settings["multiRegionConfig"] is JsonObject desiredRegions)
             {
-                JsonNode? source = settings["source"];
-                settings.Remove("source");
-                patchService["source"] = source;
-                settings["registryCredentials"] = registryCredentials?.DeepClone();
-
-                if (settings["multiRegionConfig"] is JsonObject desiredRegions)
+                JsonNode? currentRegions = instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"];
+                if (!JsonNode.DeepEquals(currentRegions, desiredRegions) || (int?)instance["numReplicas"] != 1)
                 {
-                    JsonNode? currentRegions = instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"];
-                    if (!JsonNode.DeepEquals(currentRegions, desiredRegions) || (int?)instance["numReplicas"] != 1)
-                    {
-                        await _client.SendAsync("mutation($input:ServiceInstanceUpdateInput!,$service:String!,$environment:String!){serviceInstanceUpdate(input:$input,serviceId:$service,environmentId:$environment)}",
-                            new { input = new { multiRegionConfig = desiredRegions, numReplicas = 1 }, service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-                    }
-                    settings.Remove("multiRegionConfig");
+                    await _client.SendAsync("mutation($input:ServiceInstanceUpdateInput!,$service:String!,$environment:String!){serviceInstanceUpdate(input:$input,serviceId:$service,environmentId:$environment)}",
+                        new { input = new { multiRegionConfig = desiredRegions, numReplicas = 1 }, service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
                 }
-
-                patchService["deploy"] = settings;
+                settings.Remove("multiRegionConfig");
             }
+
+            patchService["deploy"] = settings;
 
             if (variablesChanged)
             {

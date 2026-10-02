@@ -11,8 +11,10 @@ The 1.0.0 sequence committed configuration with `skipDeploys: true` then called 
 
 Both A and B packed consumer deployments completed all 11 steps. Provider metadata matched each requested image exactly. The finite job reported `SUCCESS`, stopped, and `EXITED` before the dependent web step ran. The [public web endpoint](https://image-update-web-proof-production.up.railway.app) returned HTTP 200; the web service remains running for inspection.
 
+A repeat B deployment also passed all 11 steps. It preserved web deployment `28e40f79-f968-4263-a804-b48d5c7b7fed` and intentionally ran the finite job again as `ae76a309-1fb7-4038-a23f-1e02caaba569`, with the same requested B digest, stopped state, and `EXITED` instance.
+
 A separate scoped provider probe first configured a new source with skipped deployment, then committed that identical source with deployments enabled, without an extra changed variable. Railway launched the configured image. This verifies recovery when configuration already points to the desired image but the latest deployment still uses its predecessor.
 
-Contract tests reproduce the previous source-selection behavior, validate ordinary and finite image updates, reject wrong or missing successful image metadata, and verify recovery of lost configuration-commit and explicit-deploy responses without a second accepted execution. The existing ownership, scope, secrets, partial application, and pipeline tests remain active.
+All 97 tests passed, including the live scoped-token test; the packed-NuGet TypeScript gate passed. Contract tests reproduce the previous source-selection behavior, validate ordinary and finite image updates, reject wrong or missing successful image metadata, and verify recovery of lost configuration-commit and explicit-deploy responses without a second accepted execution. The existing ownership, scope, secrets, partial application, and pipeline tests remain active.
 
 This package is not published. Template consumption requires maintainer review/merge/publication of 1.0.1 followed by the template dependency update. The existing 1.0.0 publication cannot be overwritten.
