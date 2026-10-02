@@ -59,7 +59,7 @@ public sealed class ReconciliationContractTests
     {
         using Provider provider = new() { FailNextPatch = true };
         JsonObject identity = [];
-        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), identity));
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), identity));
         Assert.Equal("service", (string?)identity["serviceId"]);
         await ApplyAsync(provider, new(), identity);
         Assert.Equal(1, provider.Creates);
@@ -70,7 +70,7 @@ public sealed class ReconciliationContractTests
     {
         using Provider provider = new() { FailNextDeploy = true };
         JsonObject identity = [];
-        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), identity));
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), identity));
         Assert.True((bool)identity["pending"]!);
         RailwayServiceResult retry = await ApplyAsync(provider, new(), identity);
         Assert.True(retry.Deployed);
@@ -87,6 +87,90 @@ public sealed class ReconciliationContractTests
         Assert.Equal("deployment", result.DeploymentId);
         Assert.Equal(2, provider.DeployRequests);
         Assert.Equal(1, provider.Creates);
+    }
+
+    [Fact]
+    public async Task LostLaterFiniteResponseRecoversItsExactDeploymentWithoutExecutingTwice()
+    {
+        using Provider provider = new() { Status = "SUCCESS", InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await ApplyAsync(provider, options, identity);
+        provider.LoseNextDeployResponse = true;
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity));
+        Assert.NotNull(identity["deploymentAttempt"]?["baseline"]);
+        Assert.True((bool)identity["pending"]!);
+        int requests = provider.DeployRequests;
+        RailwayServiceResult recovered = await ApplyAsync(provider, options, identity);
+        Assert.Equal("deployment-2", recovered.DeploymentId);
+        Assert.Equal(requests, provider.DeployRequests);
+        Assert.Null(identity["deploymentAttempt"]);
+    }
+
+    [Fact]
+    public async Task UnknownAcceptedResponseNeverBlindlyResendsAFiniteRequest()
+    {
+        using Provider provider = new() { LoseNextDeployResponse = true, HideDeploymentIds = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity));
+        int requests = provider.DeployRequests;
+        options.DeploymentTimeout = TimeSpan.FromMilliseconds(1);
+        await Assert.ThrowsAsync<TimeoutException>(() => ApplyAsync(provider, options, identity));
+        Assert.Equal(requests, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task PendingFiniteConfigurationChangesFailBeforeFurtherMutation()
+    {
+        using Provider provider = new() { LoseNextDeployResponse = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity));
+        int mutations = provider.Mutations;
+        options.StartCommand = "a different executable";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Equal(mutations, provider.Mutations);
+    }
+
+    [Fact]
+    public async Task OutputReadFailureDoesNotExecuteACompletedFiniteProcessAgain()
+    {
+        using Provider provider = new() { Status = "SUCCESS", InstanceStatus = "EXITED", Stopped = true, FailNextOutputRead = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, options, identity));
+        int requests = provider.DeployRequests;
+        Assert.Equal("deployment", identity["deploymentAttempt"]?["id"]?.GetValue<string>());
+        await ApplyAsync(provider, options, identity);
+        Assert.Equal(requests, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task KnownTerminalFiniteFailureAllowsANewIntentionalInvocation()
+    {
+        using Provider provider = new() { Status = "SUCCESS", InstanceStatus = "CRASHED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.False((bool)identity["pending"]!);
+        Assert.Null(identity["deploymentAttempt"]);
+        provider.InstanceStatus = "EXITED";
+        RailwayServiceResult next = await ApplyAsync(provider, options, identity);
+        Assert.Equal("deployment-2", next.DeploymentId);
+        Assert.Equal(2, provider.DeployRequests);
+    }
+
+    [Fact]
+    public async Task LegacyUncertainFiniteStateCannotSilentlyStartAnotherExecution()
+    {
+        using Provider provider = new();
+        provider.CreateService(marked: true);
+        JsonObject identity = Identity();
+        identity["pending"] = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider,
+            new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true }, identity));
+        Assert.Equal(0, provider.Mutations);
     }
 
     [Fact]
@@ -392,6 +476,9 @@ public sealed class ReconciliationContractTests
         internal int DeployRequests { get; private set; }
         internal int InitialMissingResponses { get; set; }
         internal bool AmbiguousInitialDeployments { get; set; }
+        internal bool LoseNextDeployResponse { get; set; }
+        internal bool HideDeploymentIds { get; set; }
+        internal bool FailNextOutputRead { get; set; }
         private readonly JsonArray _deploymentIds = [];
         internal JsonNode? LastPatch { get; private set; }
         internal JsonObject Regions { get; private set; } = new() { ["sfo"] = new JsonObject { ["numReplicas"] = 1 } };
@@ -463,13 +550,20 @@ public sealed class ReconciliationContractTests
             }
             else if (query.Contains("deployments(input:", StringComparison.Ordinal))
             {
-                data["deployments"] = new JsonObject { ["edges"] = _deploymentIds.DeepClone() };
+                data["deployments"] = new JsonObject { ["edges"] = HideDeploymentIds ? new JsonArray() : _deploymentIds.DeepClone() };
             }
             else if (query.Contains("{variables(", StringComparison.Ordinal))
             {
                 JsonObject variables = args["service"] is null ? new() { ["PINGUAPPS_SITE_KEY"] = Site } : (JsonObject)_variables.DeepClone();
                 if (!query.Contains("unrendered:true", StringComparison.Ordinal))
-                { variables["RAILWAY_PRIVATE_DOMAIN"] = "web.railway.internal"; }
+                {
+                    if (FailNextOutputRead)
+                    {
+                        FailNextOutputRead = false;
+                        throw new HttpRequestException("Simulated output read failure.");
+                    }
+                    variables["RAILWAY_PRIVATE_DOMAIN"] = "web.railway.internal";
+                }
                 data["variables"] = variables;
             }
             else if (query.Contains("serviceCreate", StringComparison.Ordinal))
@@ -551,10 +645,17 @@ public sealed class ReconciliationContractTests
                 }
                 if (query.Contains("serviceInstanceDeployV2", StringComparison.Ordinal))
                 {
-                    _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = "deployment" } });
+                    string id = _deploymentIds.Count == 0 ? "deployment" : $"deployment-{_deploymentIds.Count + 1}";
+                    _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = id } });
+                    _service!["latestDeployment"]!["id"] = id;
                     if (AmbiguousInitialDeployments)
                     { _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = "operator-deployment" } }); }
-                    data["serviceInstanceDeployV2"] = "deployment";
+                    if (LoseNextDeployResponse)
+                    {
+                        LoseNextDeployResponse = false;
+                        throw new HttpRequestException("Simulated lost accepted response.");
+                    }
+                    data["serviceInstanceDeployV2"] = id;
                 }
                 else
                 { data["serviceInstanceDeploy"] = true; }

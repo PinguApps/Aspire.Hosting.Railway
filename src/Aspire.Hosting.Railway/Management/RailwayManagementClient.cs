@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace Aspire.Hosting.Railway.Management;
@@ -47,11 +49,18 @@ internal sealed class RailwayManagementClient
                 throw new RailwayDeploymentNotFoundException();
             }
 
+            if (operation == "serviceInstanceDeployV2")
+            {
+                throw new RailwayDeploymentRejectedException();
+            }
+
             throw new InvalidOperationException($"Railway rejected operation '{operation}'. Provider details are suppressed to protect workload secrets.");
         }
 
         return body["data"]?.AsObject() ?? throw new InvalidOperationException("Railway returned no operation data.");
     }
+
+    internal string Fingerprint(string value) => Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(_token), Encoding.UTF8.GetBytes(value)));
 
     private static string GetOperationName(string query)
     {
@@ -111,6 +120,14 @@ internal sealed class RailwayManagementClient
 internal sealed class RailwayDeploymentNotFoundException : InvalidOperationException
 {
     internal RailwayDeploymentNotFoundException() : base("Railway has not yet established its initial deployment.")
+    {
+    }
+}
+
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "This internal rejection deliberately accepts no provider message or credentials.")]
+internal sealed class RailwayDeploymentRejectedException : InvalidOperationException
+{
+    internal RailwayDeploymentRejectedException() : base("Railway rejected operation 'serviceInstanceDeployV2'. Provider details are suppressed to protect workload secrets.")
     {
     }
 }
