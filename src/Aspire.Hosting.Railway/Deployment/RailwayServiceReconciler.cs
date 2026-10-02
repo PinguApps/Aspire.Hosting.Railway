@@ -361,8 +361,9 @@ internal sealed class RailwayServiceReconciler
 
     private static void ValidateUnspecifiedRegion(JsonObject instance, RailwayServiceOptions options)
     {
-        if (options.Region is null && instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"] is JsonObject regions
-            && (regions.Count > 1 || regions.Any(region => (int?)region.Value?["numReplicas"] > 1)))
+        if (options.Region is null && ((int?)instance["numReplicas"] > 1
+            || (instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"] is JsonObject regions
+                && (regions.Count > 1 || regions.Any(region => (int?)region.Value?["numReplicas"] > 1)))))
         {
             throw new InvalidOperationException("An existing multi-region or multi-replica service requires an explicit single Railway region before reconciliation.");
         }

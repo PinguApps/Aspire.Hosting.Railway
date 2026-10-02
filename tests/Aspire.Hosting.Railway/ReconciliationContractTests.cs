@@ -173,6 +173,16 @@ public sealed class ReconciliationContractTests
         Assert.Equal(0, provider.Mutations);
     }
 
+    [Fact]
+    public async Task LiveReplicaDriftCannotHideBehindMissingDeploymentMetadata()
+    {
+        using Provider provider = new();
+        provider.CreateService(marked: true);
+        provider.SetLiveReplicaCount(2);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => PreflightAsync(provider, new(), []));
+        Assert.Equal(0, provider.Mutations);
+    }
+
     [Theory]
     [InlineData("projectId")]
     [InlineData("environmentId")]
@@ -372,6 +382,11 @@ public sealed class ReconciliationContractTests
                 ["id"] = "existing-deployment",
                 ["meta"] = new JsonObject { ["serviceManifest"] = new JsonObject { ["deploy"] = new JsonObject { ["multiRegionConfig"] = regions } } },
             };
+        }
+
+        internal void SetLiveReplicaCount(int replicas)
+        {
+            _service!["numReplicas"] = replicas;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
