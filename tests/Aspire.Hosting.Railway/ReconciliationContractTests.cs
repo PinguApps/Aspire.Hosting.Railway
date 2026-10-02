@@ -221,6 +221,34 @@ public sealed class ReconciliationContractTests
         Assert.Equal(requests + 1, provider.DeployRequests);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LegacyUnsentAttemptReceivesMarkerAndCurrentBaseline(bool changeImage)
+    {
+        using Provider provider = new() { FailNextDeploy = true, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        JsonObject? savedAttempt = null;
+        RailwayServiceOptions options = new() { RestartPolicy = RailwayRestartPolicy.Never, WaitForCompletion = true };
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity, saveIdentity: () =>
+        {
+            if (identity["deploymentAttempt"] is JsonObject attempt)
+            { savedAttempt = attempt.DeepClone().AsObject(); }
+            return Task.CompletedTask;
+        }));
+        Assert.NotNull(savedAttempt);
+        savedAttempt["sent"] = false;
+        savedAttempt.Remove("requestId");
+        savedAttempt.Remove("operation");
+        identity["deploymentAttempt"] = savedAttempt;
+        provider.CreateOperatorDeployment();
+        string image = changeImage ? UpdatedImage : Image;
+        RailwayServiceResult result = await ApplyAsync(provider, options, identity, image);
+        Assert.Equal("deployment-2", result.DeploymentId);
+        Assert.Equal(image, provider.DeployedImage);
+        Assert.Matches("^[a-f0-9]{32}$", provider.AcceptedRequestMarkers[^1]);
+    }
+
     [Fact]
     public async Task LostLaterFiniteResponseRecoversItsExactDeploymentWithoutExecutingTwice()
     {
@@ -605,11 +633,11 @@ public sealed class ReconciliationContractTests
         return reconciler.PreflightAsync(Target(), "web", "web", Image, options, identity, TestContext.Current.CancellationToken);
     }
 
-    private static Task<RailwayServiceResult> ApplyAsync(Provider provider, RailwayServiceOptions options, JsonObject identity, string image = Image)
+    private static Task<RailwayServiceResult> ApplyAsync(Provider provider, RailwayServiceOptions options, JsonObject identity, string image = Image, Func<Task>? saveIdentity = null)
     {
         HttpClient httpClient = new(provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
-        return reconciler.ApplyAsync(Target(), "web", "web", image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, TestContext.Current.CancellationToken);
+        return reconciler.ApplyAsync(Target(), "web", "web", image, options, new(StringComparer.Ordinal), identity, saveIdentity ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
     }
 
     private sealed class Provider : HttpMessageHandler

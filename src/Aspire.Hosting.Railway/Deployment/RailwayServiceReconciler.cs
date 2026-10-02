@@ -80,7 +80,7 @@ internal sealed class RailwayServiceReconciler
         }
         if (identity["deploymentAttempt"] is JsonObject priorAttempt && (string?)priorAttempt["desiredFingerprint"] != desiredFingerprint)
         {
-            if (options.WaitForCompletion)
+            if (options.WaitForCompletion && (bool?)priorAttempt["sent"] != false)
             {
                 throw new InvalidOperationException("A pending finite Railway deployment has different desired configuration or credentials. Reconcile its recorded execution before requesting another process.");
             }
@@ -278,6 +278,13 @@ internal sealed class RailwayServiceReconciler
         if (identity["deploymentAttempt"] is JsonObject recorded)
         {
             attempt = recorded;
+            if (!(bool)attempt["sent"]!)
+            {
+                HashSet<string> before = await ReadDeploymentIdsAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
+                attempt["baseline"] = new JsonArray([.. before.Order(StringComparer.Ordinal).Select(id => JsonValue.Create(id))]);
+                attempt["requestId"] ??= JsonValue.Create(Guid.NewGuid().ToString("N"));
+                await saveIdentity().ConfigureAwait(false);
+            }
         }
         else
         {
@@ -313,15 +320,15 @@ internal sealed class RailwayServiceReconciler
                 continue;
             }
 
+            if (patch is null || (string?)attempt["requestId"] is not string requestId)
+            { throw new InvalidOperationException("The recorded configuration deployment requires its desired patch and request marker before it can be retried."); }
+            JsonObject servicePatch = patch["services"]![serviceId]!.AsObject();
+            JsonObject patchVariables = servicePatch["variables"]!.AsObject();
+            patchVariables["PINGUAPPS_DEPLOYMENT_REQUEST"] = new JsonObject { ["value"] = requestId, ["isSealed"] = false };
             attempt["sent"] = true;
             await saveIdentity().ConfigureAwait(false);
             try
             {
-                if (patch is null || (string?)attempt["requestId"] is not string requestId)
-                { throw new InvalidOperationException("The recorded configuration deployment requires its desired patch and request marker before it can be retried."); }
-                JsonObject servicePatch = patch["services"]![serviceId]!.AsObject();
-                JsonObject patchVariables = servicePatch["variables"]!.AsObject();
-                patchVariables["PINGUAPPS_DEPLOYMENT_REQUEST"] = new JsonObject { ["value"] = requestId, ["isSealed"] = false };
                 JsonObject committed = await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:false)}",
                     new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
                 attempt["patchId"] = (string?)committed["environmentPatchCommit"];
