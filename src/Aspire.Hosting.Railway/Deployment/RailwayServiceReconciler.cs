@@ -65,6 +65,8 @@ internal sealed class RailwayServiceReconciler
         JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
         JsonObject? instance = FindService(environment, serviceName, (string?)identity["serviceId"] ?? options.ExistingServiceId);
         bool created = false;
+        if (variables.ContainsKey("PINGUAPPS_DEPLOYMENT_REQUEST"))
+        { throw new ArgumentException("PINGUAPPS_DEPLOYMENT_REQUEST is reserved for Railway deployment identity.", nameof(variables)); }
         variables["PINGUAPPS_SITE_KEY"] = target.SiteKey;
         variables["PINGUAPPS_RESOURCE_NAME"] = resourceName;
         if (options.Port is int port)

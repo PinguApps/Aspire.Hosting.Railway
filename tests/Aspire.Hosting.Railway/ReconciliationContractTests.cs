@@ -24,6 +24,19 @@ public sealed class ReconciliationContractTests
         Assert.Equal(1, provider.DeployRequests);
     }
 
+    [Fact]
+    public async Task ReservedRequestVariableFailsBeforeAnyMutationOrAttempt()
+    {
+        using Provider provider = new();
+        JsonObject identity = [];
+        using HttpClient httpClient = new(provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        await Assert.ThrowsAsync<ArgumentException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, new(),
+            new(StringComparer.Ordinal) { ["PINGUAPPS_DEPLOYMENT_REQUEST"] = "user-value" }, identity, () => Task.CompletedTask, TestContext.Current.CancellationToken));
+        Assert.Equal(0, provider.Mutations);
+        Assert.Null(identity["deploymentAttempt"]);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
