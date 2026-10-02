@@ -38,7 +38,7 @@ The [public web endpoint](https://web-production-62a0b5.up.railway.app) returned
 | Credential rotation | Live invalid current token overrides cached valid token and is refused. A replacement valid scoped token was not generated solely for this test. Registry/sealed fingerprint changes are contract-tested. |
 | TypeScript DTOs and exports | Packed-NuGet fixture restored generated SDK code, typechecked, and generated publish/deploy graphs with web-to-worker ordering. TypeScript did not separately deploy live infrastructure. |
 
-Normal validation: 60 non-live tests passed, with a warning-free Release build. The optional live scope test also passed against the allocated project/environment/site. The packed TypeScript gate passed using the same source. Secrets, raw deployment state and provider error payloads are not committed.
+Normal validation: 61 non-live tests passed, with a warning-free Release build. The optional live scope test also passed against the allocated project/environment/site. The packed TypeScript gate passed using the same source. Secrets, raw deployment state and provider error payloads are not committed.
 
 ## Repository setup
 

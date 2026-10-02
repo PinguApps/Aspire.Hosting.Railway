@@ -521,7 +521,7 @@ internal sealed class RailwayServiceReconciler
 
             string status = (string)deployment["status"]!;
             string[] instances = [.. deployment["instances"]!.AsArray().Select(instance => (string)instance!["status"]!)];
-            bool finite = options.WaitForCompletion || options.CronSchedule is not null;
+            bool finite = options.WaitForCompletion;
             if (status is "FAILED" or "CRASHED" or "REMOVED" or "REMOVING" or "SKIPPED" or "NEEDS_APPROVAL"
                 || (finite && instances.Any(instance => instance is "CRASHED" or "STOPPED" or "REMOVED")))
             {

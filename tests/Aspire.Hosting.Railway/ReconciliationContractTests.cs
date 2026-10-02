@@ -276,6 +276,15 @@ public sealed class ReconciliationContractTests
         Assert.Equal(mutations, provider.Mutations);
     }
 
+    [Fact]
+    public async Task ActivatedCronPublicationDoesNotWaitForTheNextScheduledProcess()
+    {
+        using Provider provider = new() { Status = "SUCCESS", InstanceStatus = "CREATED", Stopped = false };
+        RailwayServiceOptions options = new() { CronSchedule = "0 0 * * *", RestartPolicy = RailwayRestartPolicy.Never };
+        RailwayServiceResult result = await ApplyAsync(provider, options, []);
+        Assert.Equal("deployment", result.DeploymentId);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

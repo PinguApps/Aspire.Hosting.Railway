@@ -8,7 +8,7 @@ Railway can initially return `Deployment not found` while a newly configured ima
 
 Pending state is saved before configuration writes. Interrupted application retries the recorded service. Destructive external changes cause failure rather than name-based replacement.
 
-Ordinary services must reach `SUCCESS` for the exact launched deployment ID; an explicitly enabled sleeping ordinary service may also report `SLEEPING`. Finite execution always requires `SUCCESS`, `deploymentStopped`, and every instance `EXITED`. Failed/crashed deployments are rejected even if instances have exited. A timeout blocks dependent services; it does not imply that the remote process was stopped. Cron executions require `Never` restart and are not awaited as finite release prerequisites.
+Ordinary services must reach `SUCCESS` for the exact launched deployment ID; an explicitly enabled sleeping ordinary service may also report `SLEEPING`. Finite execution always requires `SUCCESS`, `deploymentStopped`, and every instance `EXITED`. Failed/crashed deployments are rejected even if instances have exited. A timeout blocks dependent services; it does not imply that the remote process was stopped. Cron publication requires the exact deployment's `SUCCESS` activation status and `Never` restart, but does not wait for its next scheduled process or provide a finite release prerequisite.
 
 Existing PostgreSQL, Upstash, and Bunny publishers participate through `push-prereq`. They remain responsible for provider-specific ownership/output generation. Adapting those packages to the full site allocation contract belongs to the later template integration phase.
 
