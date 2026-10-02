@@ -122,7 +122,7 @@ internal sealed class RailwayServiceReconciler
         await saveIdentity().ConfigureAwait(false);
         JsonObject settings = DesiredSettings(image, options);
         bool settingsChanged = !SettingsMatch(instance, settings)
-            || (registryCredentials is not null && (string?)identity["registryFingerprint"] != registryFingerprint);
+            || (string?)identity["registryFingerprint"] != registryFingerprint;
         bool variablesChanged = variables.Any(pair => options.SealedVariables.Contains(pair.Key, StringComparer.Ordinal)
             ? (string?)identity["sealedFingerprints"]?[pair.Key] != sealedFingerprints?[pair.Key]
             : (string?)currentVariables[pair.Key] != pair.Value);
@@ -137,10 +137,7 @@ internal sealed class RailwayServiceReconciler
                 JsonNode? source = settings["source"];
                 settings.Remove("source");
                 patchService["source"] = source;
-                if (registryCredentials is not null)
-                {
-                    settings["registryCredentials"] = registryCredentials.DeepClone();
-                }
+                settings["registryCredentials"] = registryCredentials?.DeepClone();
 
                 if (settings["multiRegionConfig"] is JsonObject desiredRegions)
                 {

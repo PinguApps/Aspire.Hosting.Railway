@@ -153,6 +153,24 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
+    public async Task RemovingRegistryCredentialsExplicitlyClearsTheirProviderConfiguration()
+    {
+        using Provider provider = new();
+        JsonObject identity = [];
+        using HttpClient http = new(provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(http, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        await reconciler.ApplyAsync(Target(), "web", "web", Image, new(), [], identity, () => Task.CompletedTask,
+            TestContext.Current.CancellationToken, new JsonObject { ["username"] = "user", ["password"] = "registry-password" }, "registry-hash");
+        Assert.Equal("registry-hash", (string?)identity["registryFingerprint"]);
+        RailwayServiceResult removed = await ApplyAsync(provider, new(), identity);
+        Assert.True(removed.Deployed);
+        Assert.True(provider.LastPatch!["deploy"]!.AsObject().ContainsKey("registryCredentials"));
+        Assert.Null(provider.LastPatch["deploy"]!["registryCredentials"]);
+        Assert.Null(identity["registryFingerprint"]);
+        Assert.False((await ApplyAsync(provider, new(), identity)).Deployed);
+    }
+
+    [Fact]
     public async Task MissingCachedIdentityCannotFallBackToName()
     {
         using Provider provider = new();
