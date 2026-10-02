@@ -4,7 +4,7 @@ namespace Aspire.Hosting.Railway;
 
 internal static partial class RailwayServiceValidation
 {
-    [GeneratedRegex(@"^[^\s@]+@sha256:[a-f0-9]{64}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\A[^\s@]+@sha256:[a-f0-9]{64}\z", RegexOptions.CultureInvariant)]
     private static partial Regex DigestPattern();
 
     internal static void ValidateImage(string image)
