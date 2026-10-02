@@ -533,7 +533,7 @@ internal sealed class RailwayServiceReconciler
                 return;
             }
 
-            if (!finite && status == "SUCCESS")
+            if (!finite && (status == "SUCCESS" || (options.SleepApplication && status == "SLEEPING")))
             {
                 return;
             }

@@ -264,6 +264,35 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
+    public async Task SleepingOrdinaryServiceCanBeReconciledWithoutRedeployment()
+    {
+        using Provider provider = new() { Status = "SLEEPING" };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { SleepApplication = true };
+        await ApplyAsync(provider, options, identity);
+        int mutations = provider.Mutations;
+        RailwayServiceResult repeat = await ApplyAsync(provider, options, identity);
+        Assert.False(repeat.Deployed);
+        Assert.Equal(mutations, provider.Mutations);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SleepingCannotCompleteAnUnconfiguredOrFiniteService(bool finite)
+    {
+        using Provider provider = new() { Status = "SLEEPING", InstanceStatus = "EXITED", Stopped = true };
+        RailwayServiceOptions options = new()
+        {
+            SleepApplication = finite,
+            WaitForCompletion = finite,
+            RestartPolicy = RailwayRestartPolicy.Never,
+            DeploymentTimeout = TimeSpan.FromMilliseconds(1),
+        };
+        await Assert.ThrowsAsync<TimeoutException>(() => ApplyAsync(provider, options, []));
+    }
+
+    [Fact]
     public async Task ProviderErrorsNeverExposeCredentials()
     {
         using Provider provider = new() { FailNextPatch = true };
