@@ -16,4 +16,6 @@ The readiness fix polls only missing fields for the selected exact ID, using the
 
 The locally packed, unpublished 1.0.2 fix passed 131 nonlive tests, the separately configured live scope test, version-pin validation, and the packed TypeScript gate. Its external isolated consumer then deployed that same harmless job as `59c6caa5-5f2d-41ed-96bf-3c7998622ea6`: exact Busybox digest, `SUCCESS`, stopped, and instance `EXITED`. Correlation was already complete on that read; this deployment verifies the packed route without claiming it naturally exercised missing-field polling.
 
+The complete Template v0.1.7 graph also passed both first deployment and same-state repeat with the local 1.0.2 package: 19/19 steps, eight successful retained services, five unchanged long-running deployment IDs, three new finite executions, and four exact requested workload digests. Health, cache, media, release identity, sixteen CDN hash/length/source checks, and RabbitMQ access/active-connection checks passed. These checks used an external worktree and isolated package cache; the official 1.0.1 cache was not modified.
+
 Maintainer review, merge, and NuGet publication are still required. Local-package validation does not demonstrate that the published 1.0.1 package has been corrected, and the original GitHub Actions repeat remains failed.
