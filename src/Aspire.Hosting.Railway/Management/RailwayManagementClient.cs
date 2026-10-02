@@ -49,7 +49,7 @@ internal sealed class RailwayManagementClient
                 throw new RailwayDeploymentNotFoundException();
             }
 
-            if (operation is "serviceInstanceDeployV2" or "serviceInstanceDeploy")
+            if (operation is "serviceInstanceDeployV2" or "serviceInstanceDeploy" or "environmentPatchCommit")
             {
                 throw new RailwayDeploymentRejectedException();
             }
