@@ -1,0 +1,7 @@
+{
+  "appHost": {"path":"apphost.mts","language":"typescript/nodejs"},
+  "sdk":{"version":"13.6.0"},
+  "channel":"stable",
+  "packages":{"PinguApps.Aspire.Hosting.Railway":"../../src/Aspire.Hosting.Railway/Aspire.Hosting.Railway.csproj"},
+  "Parameters":{"railway-project-id":"demo-project-id","railway-environment-id":"demo-environment-id","railway-api-token":"demo-api-token","site-key":"demo-site"}
+}

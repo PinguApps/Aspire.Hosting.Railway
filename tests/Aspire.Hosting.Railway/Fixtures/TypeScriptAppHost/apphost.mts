@@ -1,0 +1,16 @@
+import { createBuilder, railwayOwnershipMode, railwayRestartPolicy, railwayAuthenticationMode } from "./.aspire/modules/aspire.mjs";
+const builder = await createBuilder();
+const project = await builder.addParameter("railway-project-id");
+const environment = await builder.addParameter("railway-environment-id");
+const token = await builder.addParameter("railway-api-token", { secret: true });
+const site = await builder.addParameter("site-key");
+const target = await builder.addRailwayTarget("railway", project, environment, token, site, { authenticationMode: railwayAuthenticationMode.projectToken });
+let web = await builder.addContainer("web", "traefik/whoami");
+web = await web.publishToRailway(target, { image: "traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44", ownershipMode: railwayOwnershipMode.createOrAdopt, restartPolicy: railwayRestartPolicy.onFailure, port: 80, publicDomain: true, healthCheckPath: "/", volumes: [{ mountPath: "/data" }], sealedVariables: [] });
+const hostname = await web.getRailwayPrivateHostname();
+let worker = await builder.addContainer("worker", "traefik/whoami");
+worker = await worker.publishToRailway(target, { image: "traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44" });
+worker = await worker.withEnvironment("WEB_HOST", hostname);
+worker = await worker.withRailwayDeploymentDependency(web);
+const app = await builder.build();
+await app.run();

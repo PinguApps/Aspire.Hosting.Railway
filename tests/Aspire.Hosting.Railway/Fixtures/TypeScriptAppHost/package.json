@@ -1,0 +1,22 @@
+{
+  "name": "pinguapps-railway-postgres-typescript-apphost-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "restore": "aspire restore --non-interactive",
+    "start": "aspire start --non-interactive --isolated",
+    "wait:postgres": "aspire wait postgres --status healthy --timeout 120 --non-interactive",
+    "stop": "aspire stop --non-interactive",
+    "publish": "aspire publish --non-interactive --list-steps",
+    "typecheck": "tsc -p tsconfig.apphost.json --noEmit"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "tsx": "4.23.15",
+    "vscode-jsonrpc": "8.2.1",
+    "typescript": "7.0.2"
+  }
+}

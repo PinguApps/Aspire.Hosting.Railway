@@ -1,0 +1,4 @@
+<Solution>
+  <Folder Name="/src/"><Project Path="src/Aspire.Hosting.Railway/Aspire.Hosting.Railway.csproj" /></Folder>
+  <Folder Name="/tests/"><Project Path="tests/Aspire.Hosting.Railway/Aspire.Hosting.Railway.Tests.csproj" /></Folder>
+</Solution>

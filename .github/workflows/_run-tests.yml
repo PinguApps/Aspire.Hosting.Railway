@@ -1,0 +1,147 @@
+name: Run Tests
+
+on:
+  workflow_call:
+    inputs:
+      publish_test_results_comment_mode:
+        required: false
+        type: string
+        default: off
+      publish_test_results_check_name:
+        required: false
+        type: string
+        default: Test Results
+      publish_test_results_to_github:
+        required: false
+        type: boolean
+        default: false
+      checkout_ref:
+        required: false
+        type: string
+        default: ''
+      test_filter:
+        required: false
+        type: string
+        default: Category!=live-railway
+    secrets:
+      RAILWAY_EMAIL:
+        required: false
+      RAILWAY_API_KEY:
+        required: false
+      RAILWAY_API_TOKEN:
+        required: false
+      RAILWAY_PROJECT_ID:
+        required: false
+      RAILWAY_ENVIRONMENT_ID:
+        required: false
+  workflow_dispatch:
+    inputs:
+      test_filter:
+        description: Test filter passed to dotnet test
+        required: false
+        default: Category!=live-railway
+        type: string
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  test:
+    name: Run test suite
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    env:
+      CI: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      DOTNET_NOLOGO: true
+      RAILWAY_EMAIL: ${{ secrets.RAILWAY_EMAIL }}
+      RAILWAY_API_KEY: ${{ secrets.RAILWAY_API_KEY }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+      RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Validate Aspire version pins
+        shell: pwsh
+        run: ./eng/Test-AspireVersionPins.ps1
+
+      - name: Setup Aspire CLI
+        run: |
+          dotnet tool install -g Aspire.Cli --version 13.6.0
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Restore solution
+        run: dotnet restore Aspire.Hosting.Railway.slnx
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          $testFilter = "${{ inputs.test_filter }}"
+          if ([string]::IsNullOrWhiteSpace($testFilter)) {
+            $testFilter = "Category!=live-railway"
+          }
+
+          $arguments = @(
+            "test",
+            "Aspire.Hosting.Railway.slnx",
+            "-c",
+            "Release",
+            "--no-restore",
+            "--report-xunit-trx",
+            "--report-xunit-trx-filename",
+            "test-results.trx",
+            "--results-directory",
+            "TestResults"
+          )
+
+          if (-not [string]::IsNullOrWhiteSpace($testFilter)) {
+            $arguments += "--filter"
+            $arguments += $testFilter
+          }
+
+          dotnet $arguments
+
+      - name: Publish test results
+        if: (success() || failure()) && inputs.publish_test_results_to_github
+        uses: EnricoMi/publish-unit-test-result-action/linux@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2
+        with:
+          files: TestResults/**/*.trx
+          check_name: ${{ inputs.publish_test_results_check_name }}
+          comment_mode: ${{ inputs.publish_test_results_comment_mode }}
+          job_summary: false
+
+      - name: Summarize test results
+        if: always()
+        shell: pwsh
+        run: |
+          $trxFiles = Get-ChildItem -Path TestResults -Filter *.trx -Recurse -ErrorAction SilentlyContinue
+
+          if (-not $trxFiles) {
+            "## Test results`nNo TRX files were produced." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          "## Test results" >> $env:GITHUB_STEP_SUMMARY
+
+          foreach ($trxFile in $trxFiles) {
+            [xml]$trx = Get-Content $trxFile.FullName
+            $counters = $trx.TestRun.ResultSummary.Counters
+            "- $($trxFile.Name): passed $($counters.passed), failed $($counters.failed), skipped $($counters.notExecuted), total $($counters.total)" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-results
+          path: TestResults/**/*.trx
+          if-no-files-found: warn

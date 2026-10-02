@@ -1,0 +1,70 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+    inputs:
+      run_live_railway:
+        description: Run credential-gated @live-railway scenarios
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: pull-request-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typescript-apphost-package:
+    name: TypeScript AppHost package gate
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Setup Aspire CLI
+        run: |
+          dotnet tool install -g Aspire.Cli --version 13.6.0
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Validate NuGet-backed TypeScript AppHost fixture
+        shell: pwsh
+        run: ./eng/Validate-TypeScriptAppHostPackage.ps1
+
+  tests:
+    uses: ./.github/workflows/_run-tests.yml
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    with:
+      publish_test_results_to_github: ${{ github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork }}
+      publish_test_results_comment_mode: always
+      publish_test_results_check_name: Pull Request Test Results
+
+  live-railway:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_railway
+    uses: ./.github/workflows/_run-tests.yml
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    secrets: inherit
+    with:
+      test_filter: Category=live-railway
+      publish_test_results_to_github: true
+      publish_test_results_comment_mode: off
+      publish_test_results_check_name: Live Railway Test Results
