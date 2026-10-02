@@ -51,6 +51,18 @@ public sealed class ReconciliationContractTests
         Assert.Null(provider.LastPatch["variables"]!["REMOVED"]);
     }
 
+    [Fact]
+    public async Task UnchangedCronActivationStillRequiresExactImageMetadata()
+    {
+        using Provider provider = new() { InstanceStatus = "CREATED" };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { CronSchedule = "*/5 * * * *", RestartPolicy = RailwayRestartPolicy.Never };
+        await ApplyAsync(provider, options, identity);
+        provider.OmitReportedImage = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

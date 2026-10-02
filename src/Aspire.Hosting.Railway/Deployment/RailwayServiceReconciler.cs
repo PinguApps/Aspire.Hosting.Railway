@@ -228,20 +228,17 @@ internal sealed class RailwayServiceReconciler
             await saveIdentity().ConfigureAwait(false);
         }
 
-        if (options.CronSchedule is null || deploy)
+        try
         {
-            try
-            {
-                await WaitForDeploymentAsync(target, serviceId, deploymentId!, image, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
-            }
-            catch (RailwayDeploymentFailedException)
-            {
-                identity["pending"] = !options.WaitForCompletion;
-                identity.Remove("deploymentAttempt");
-                identity.Remove("applyPhase");
-                await saveIdentity().ConfigureAwait(false);
-                throw;
-            }
+            await WaitForDeploymentAsync(target, serviceId, deploymentId!, image, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RailwayDeploymentFailedException)
+        {
+            identity["pending"] = !options.WaitForCompletion;
+            identity.Remove("deploymentAttempt");
+            identity.Remove("applyPhase");
+            await saveIdentity().ConfigureAwait(false);
+            throw;
         }
 
         JsonObject rendered = await _client.SendAsync("query($project:String!,$environment:String!,$service:String){variables(projectId:$project,environmentId:$environment,serviceId:$service)}",
