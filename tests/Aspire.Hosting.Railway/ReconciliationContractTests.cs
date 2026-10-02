@@ -162,6 +162,18 @@ public sealed class ReconciliationContractTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnspecifiedRegionCannotSilentlyRetainMultipleRegionsOrReplicas(bool multipleRegions)
+    {
+        using Provider provider = new();
+        provider.CreateService(marked: true);
+        provider.SetExistingRegions(multipleRegions);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => PreflightAsync(provider, new(), []));
+        Assert.Equal(0, provider.Mutations);
+    }
+
+    [Theory]
     [InlineData("projectId")]
     [InlineData("environmentId")]
     [InlineData("siteKey")]
@@ -310,6 +322,18 @@ public sealed class ReconciliationContractTests
                 _variables["PINGUAPPS_SITE_KEY"] = "site";
                 _variables["PINGUAPPS_RESOURCE_NAME"] = "web";
             }
+        }
+
+        internal void SetExistingRegions(bool multipleRegions)
+        {
+            JsonObject regions = new() { ["sfo"] = new JsonObject { ["numReplicas"] = multipleRegions ? 1 : 2 } };
+            if (multipleRegions)
+            { regions["ams"] = new JsonObject { ["numReplicas"] = 1 }; }
+            _service!["latestDeployment"] = new JsonObject
+            {
+                ["id"] = "existing-deployment",
+                ["meta"] = new JsonObject { ["serviceManifest"] = new JsonObject { ["deploy"] = new JsonObject { ["multiRegionConfig"] = regions } } },
+            };
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

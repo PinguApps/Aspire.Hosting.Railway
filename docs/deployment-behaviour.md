@@ -4,6 +4,8 @@ The plan runs after `process-parameters` and before `deploy-prereq`, validating 
 
 Settings and runtime variables use a configuration patch with `skipDeploys`, followed by one explicit deployment whose returned ID is tracked. Repeat deployment compares desired live settings, variables, secret fingerprints, volume/domain identities, and resource limits. Unchanged ordinary services reuse their successful deployment; finite release jobs explicitly execute again.
 
+Railway can initially return `Deployment not found` while a newly configured image source becomes available. Only this exact transient error is retried, within the service's overall deployment timeout. Each retry checks for newly created deployment IDs first; multiple candidates fail rather than following an arbitrary latest deployment. The same timeout budget covers initialization, readiness, and finite completion. Other provider errors fail immediately. No bootstrap workload is launched before the full desired configuration is applied.
+
 Pending state is saved before configuration writes. Interrupted application retries the recorded service. Destructive external changes cause failure rather than name-based replacement.
 
 Ordinary services must reach `SUCCESS` for the exact launched deployment ID. Finite execution additionally requires `deploymentStopped` and every instance `EXITED`. Failed/crashed deployments are rejected even if instances have exited. A timeout blocks dependent services; it does not imply that the remote process was stopped. Cron executions require `Never` restart and are not awaited as finite release prerequisites.

@@ -9,6 +9,6 @@ npm run typecheck
 aspire deploy --non-interactive --list-steps
 ```
 
-For an actual deployment, configure the current values through `Parameters__railway-project-id`, `Parameters__railway-environment-id`, `Parameters__railway-api-token`, and `Parameters__site-key`. Use an environment-scoped project token and initialize the shared Railway variable `PINGUAPPS_SITE_KEY` to the same site key before deployment. The project and environment must already exist. Then run `aspire deploy --non-interactive`.
+For an actual deployment, configure the current values through `Parameters__railway_project_id`, `Parameters__railway_environment_id`, `Parameters__railway_api_token`, and `Parameters__site_key`. The sample binds these explicit current values rather than relying on cached parameters. Use an environment-scoped project token and initialize the shared Railway variable `PINGUAPPS_SITE_KEY` to the same site key before deployment. The project and environment must already exist. Then run `aspire deploy --non-interactive`.
 
 The web service exposes port 80 with `/` readiness and a `/data` volume. The worker has no public domain; it receives the web private hostname after the web deployment succeeds. This deploys real resources and incurs Railway usage charges.
