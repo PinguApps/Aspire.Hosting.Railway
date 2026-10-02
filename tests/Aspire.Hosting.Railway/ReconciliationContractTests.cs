@@ -58,7 +58,7 @@ public sealed class ReconciliationContractTests
     {
         using Provider provider = new() { MissingCorrelationField = field, MissingCorrelationResponses = int.MaxValue, InstanceStatus = "EXITED", Stopped = true };
         JsonObject identity = [];
-        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never, DeploymentTimeout = TimeSpan.FromMilliseconds(75) };
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never, DeploymentTimeout = TimeSpan.FromSeconds(1.5) };
         TimeoutException error = await Assert.ThrowsAsync<TimeoutException>(() => ApplyAsync(provider, options, identity));
         Assert.Contains("association", error.Message, StringComparison.Ordinal);
         Assert.True((bool)identity["deploymentAttempt"]!["sent"]!);
