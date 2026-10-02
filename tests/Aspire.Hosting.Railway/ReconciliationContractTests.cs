@@ -11,6 +11,19 @@ public sealed class ReconciliationContractTests
     private const string Image = "ghcr.io/pinguapps/test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string UpdatedImage = "ghcr.io/pinguapps/test@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    [Fact]
+    public async Task UnrelatedSameImageDeploymentCannotSatisfyTheRecordedRequest()
+    {
+        using Provider provider = new() { WrongRequestMarker = true, InstanceStatus = "EXITED", Stopped = true };
+        JsonObject identity = [];
+        RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Contains("association", error.Message, StringComparison.Ordinal);
+        Assert.Equal(Image, provider.DeployedImage);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, options, identity));
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -659,10 +672,12 @@ public sealed class ReconciliationContractTests
         internal string? ForcedDeploymentImage { get; set; }
         internal string? ReportedImage { get; set; }
         internal bool OmitReportedImage { get; set; }
+        internal bool WrongRequestMarker { get; set; }
         internal string? DeployedImage { get; private set; }
         internal bool LastDeployWasFromSource { get; private set; }
         private readonly JsonArray _deploymentIds = [];
         private readonly Dictionary<string, string?> _deploymentImages = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _deploymentMarkers = new(StringComparer.Ordinal);
         private JsonObject _deploySettings = [];
         private JsonNode? _lastCommittedPatch;
         internal List<string> AcceptedRequestMarkers { get; } = [];
@@ -838,8 +853,15 @@ public sealed class ReconciliationContractTests
                 if (OmitReportedImage)
                 { reportedImage = null; }
                 data["deployment"] = query.Contains("deployment(id:", StringComparison.Ordinal)
-                    ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["meta"] = new JsonObject { ["image"] = reportedImage }, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
+                    ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["meta"] = new JsonObject { ["image"] = reportedImage, ["patchId"] = $"patch-{args["id"]}" }, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
                     : throw new InvalidOperationException($"Unexpected test operation: {query}");
+                if (query.Contains("deploymentSnapshot", StringComparison.Ordinal))
+                {
+                    string marker = _deploymentMarkers.GetValueOrDefault((string)args["id"]!) ?? string.Empty;
+                    if (WrongRequestMarker)
+                    { marker = "unrelated-operator-request"; }
+                    data["deploymentSnapshot"] = new JsonObject { ["variables"] = new JsonObject { ["PINGUAPPS_DEPLOYMENT_REQUEST"] = marker } };
+                }
             }
 
             return Response(new JsonObject { ["data"] = data });
@@ -865,6 +887,7 @@ public sealed class ReconciliationContractTests
             _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = id } });
             DeployedImage = ForcedDeploymentImage ?? (fromSource ? (string?)_service!["source"]?["image"] : DeployedImage ?? (string?)_service!["source"]?["image"]);
             _deploymentImages[id] = DeployedImage;
+            _deploymentMarkers[id] = AcceptedRequestMarkers[^1];
             _service!["latestDeployment"] = new JsonObject { ["id"] = id, ["meta"] = new JsonObject { ["image"] = DeployedImage, ["serviceManifest"] = new JsonObject { ["deploy"] = _deploySettings.DeepClone() } } };
             if (AmbiguousInitialDeployments)
             { _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = "operator-deployment" } }); }
@@ -874,7 +897,7 @@ public sealed class ReconciliationContractTests
                 throw new HttpRequestException("Simulated lost accepted response.");
             }
             if (operation == "environmentPatchCommit")
-            { return Response(new JsonObject { ["data"] = new JsonObject { [operation] = "patch" } }); }
+            { return Response(new JsonObject { ["data"] = new JsonObject { [operation] = $"patch-{id}" } }); }
             if (operation == "serviceInstanceDeployV2")
             { return Response(new JsonObject { ["data"] = new JsonObject { [operation] = id } }); }
             return Response(new JsonObject { ["data"] = new JsonObject { [operation] = true } });

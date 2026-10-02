@@ -309,6 +309,7 @@ internal sealed class RailwayServiceReconciler
             {
                 if (!(bool)attempt["sent"]!)
                 { throw new InvalidOperationException("An unexpected Railway deployment appeared before the recorded request. Reconcile concurrent changes before retrying."); }
+                await ValidateDeploymentRequestAsync(target, serviceId, deploymentId, attempt, cancellationToken).ConfigureAwait(false);
                 attempt["id"] = deploymentId;
                 await saveIdentity().ConfigureAwait(false);
                 return deploymentId;
@@ -401,6 +402,22 @@ internal sealed class RailwayServiceReconciler
         }
 
         return expectedId ?? added.SingleOrDefault();
+    }
+
+    private async Task ValidateDeploymentRequestAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, JsonObject attempt, CancellationToken cancellationToken)
+    {
+        if ((string?)attempt["requestId"] is not string requestId)
+        { return; }
+        JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId meta} deploymentSnapshot(deploymentId:$id){variables}}",
+            new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
+        JsonNode? deployment = data["deployment"];
+        if ((string?)deployment?["projectId"] != target.ProjectId || (string?)deployment?["environmentId"] != target.EnvironmentId
+            || (string?)deployment?["serviceId"] != serviceId
+            || (string?)data["deploymentSnapshot"]?["variables"]?["PINGUAPPS_DEPLOYMENT_REQUEST"] != requestId
+            || (attempt["patchId"] is not null && (string?)deployment?["meta"]?["patchId"] != (string?)attempt["patchId"]))
+        {
+            throw new InvalidOperationException("The exact Railway deployment does not prove its association with the recorded configuration request. Reconcile concurrent changes before retrying.");
+        }
     }
 
     private async Task<HashSet<string>> ReadDeploymentIdsAsync(RailwayResolvedTarget target, string serviceId, CancellationToken cancellationToken)
