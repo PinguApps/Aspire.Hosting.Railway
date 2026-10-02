@@ -419,10 +419,13 @@ internal sealed class RailwayServiceReconciler
         JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId meta} deploymentSnapshot(deploymentId:$id){variables}}",
             new { id = deploymentId }, cancellationToken).ConfigureAwait(false);
         JsonNode? deployment = data["deployment"];
+        string? actualPatchId = (string?)deployment?["meta"]?["patchId"];
+        string? expectedPatchId = (string?)attempt["patchId"];
         if ((string?)deployment?["projectId"] != target.ProjectId || (string?)deployment?["environmentId"] != target.EnvironmentId
             || (string?)deployment?["serviceId"] != serviceId
             || (string?)data["deploymentSnapshot"]?["variables"]?["PINGUAPPS_DEPLOYMENT_REQUEST"] != requestId
-            || (attempt["patchId"] is not null && (string?)deployment?["meta"]?["patchId"] != (string?)attempt["patchId"]))
+            || (expectedPatchId is not null && (actualPatchId is null
+                || (expectedPatchId != actualPatchId && expectedPatchId != $"commitChanges/{target.EnvironmentId}/{actualPatchId}"))))
         {
             throw new InvalidOperationException("The exact Railway deployment does not prove its association with the recorded configuration request. Reconcile concurrent changes before retrying.");
         }

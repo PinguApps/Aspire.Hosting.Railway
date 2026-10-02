@@ -12,6 +12,15 @@ public sealed class ReconciliationContractTests
     private const string UpdatedImage = "ghcr.io/pinguapps/test@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     [Fact]
+    public async Task ScopedCommitQueueReferenceCorrelatesWithTheDeploymentPatchId()
+    {
+        using Provider provider = new() { ReturnCompositePatchReference = true };
+        RailwayServiceResult result = await ApplyAsync(provider, new(), []);
+        Assert.Equal("deployment", result.DeploymentId);
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Fact]
     public async Task UnrelatedSameImageDeploymentCannotSatisfyTheRecordedRequest()
     {
         using Provider provider = new() { WrongRequestMarker = true, InstanceStatus = "EXITED", Stopped = true };
@@ -712,6 +721,7 @@ public sealed class ReconciliationContractTests
         internal string? ReportedImage { get; set; }
         internal bool OmitReportedImage { get; set; }
         internal bool WrongRequestMarker { get; set; }
+        internal bool ReturnCompositePatchReference { get; set; }
         internal string? DeployedImage { get; private set; }
         internal bool LastDeployWasFromSource { get; private set; }
         private readonly JsonArray _deploymentIds = [];
@@ -938,7 +948,10 @@ public sealed class ReconciliationContractTests
                 throw new HttpRequestException("Simulated lost accepted response.");
             }
             if (operation == "environmentPatchCommit")
-            { return Response(new JsonObject { ["data"] = new JsonObject { [operation] = $"patch-{id}" } }); }
+            {
+                string patchReference = ReturnCompositePatchReference ? $"commitChanges/environment/patch-{id}" : $"patch-{id}";
+                return Response(new JsonObject { ["data"] = new JsonObject { [operation] = patchReference } });
+            }
             if (operation == "serviceInstanceDeployV2")
             { return Response(new JsonObject { ["data"] = new JsonObject { [operation] = id } }); }
             return Response(new JsonObject { ["data"] = new JsonObject { [operation] = true } });
