@@ -453,7 +453,7 @@ internal sealed class RailwayServiceReconciler
 
         foreach (string domain in options.CustomDomains)
         {
-            if (domains["customDomains"]!.AsArray().Any(existing => (string?)existing!["domain"] == domain))
+            if (domains["customDomains"]!.AsArray().Any(existing => string.Equals((string?)existing!["domain"], domain, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
@@ -473,7 +473,7 @@ internal sealed class RailwayServiceReconciler
         {
             throw new InvalidOperationException("An existing Railway TCP proxy would retain unsupported public exposure. Reconcile it explicitly before deployment.");
         }
-        if ((!options.PublicDomain && serviceDomains.Count != 0) || domains["customDomains"]!.AsArray().Any(domain => !options.CustomDomains.Contains((string)domain!["domain"]!, StringComparer.Ordinal)))
+        if ((!options.PublicDomain && serviceDomains.Count != 0) || domains["customDomains"]!.AsArray().Any(domain => !options.CustomDomains.Contains((string)domain!["domain"]!, StringComparer.OrdinalIgnoreCase)))
         {
             throw new InvalidOperationException("Railway public domain drift requires operator reconciliation; no public exposure is silently retained or deleted.");
         }

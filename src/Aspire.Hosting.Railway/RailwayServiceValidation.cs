@@ -39,6 +39,13 @@ internal static partial class RailwayServiceValidation
             ValidateImage(options.Image);
         }
 
+        if (options.CustomDomains.Any(domain => string.IsNullOrWhiteSpace(domain) || domain.EndsWith('.')
+                || !domain.Contains('.', StringComparison.Ordinal) || Uri.CheckHostName(domain) != UriHostNameType.Dns)
+            || options.CustomDomains.Distinct(StringComparer.OrdinalIgnoreCase).Count() != options.CustomDomains.Count)
+        {
+            throw new ArgumentException("Custom domains must be unique DNS host names without a scheme, path or trailing dot.", nameof(options));
+        }
+
         if (options.Port is < 1 or > 65535 || options.RestartPolicyMaxRetries < 0
             || (options.RestartPolicy != RailwayRestartPolicy.Never && options.RestartPolicyMaxRetries == 0) || options.DeploymentTimeout <= TimeSpan.Zero
             || options.MemoryGB is <= 0 || options.VCpus is <= 0
