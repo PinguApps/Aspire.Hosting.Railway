@@ -5,6 +5,18 @@ namespace Aspire.Hosting.Railway.Tests;
 public sealed class ReviewValidationContractTests
 {
     [Theory]
+    [InlineData("secret-token", "registry-password")]
+    [InlineData("registry-user", "secret-token")]
+    [InlineData("prefix-secret-token", "registry-password")]
+    public void RegistryCredentialsCannotContainTheControlPlaneToken(string username, string password)
+    {
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() =>
+            RailwayDeploymentPipeline.ValidateRegistryCredentials("secret-token", username, password));
+        Assert.DoesNotContain("secret-token", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("registry-password", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData(" ")]
     [InlineData("https://example.com")]

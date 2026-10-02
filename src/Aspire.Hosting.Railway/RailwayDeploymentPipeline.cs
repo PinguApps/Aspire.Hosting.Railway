@@ -105,10 +105,7 @@ internal static class RailwayDeploymentPipeline
         {
             string username = await ResolveRequiredAsync(annotation.Options.RegistryUsername, valueContext, context.CancellationToken).ConfigureAwait(false);
             string password = await ResolveRequiredAsync(annotation.Options.RegistryPassword, valueContext, context.CancellationToken).ConfigureAwait(false);
-            if (password == token)
-            {
-                throw new InvalidOperationException("Railway control-plane credentials cannot be used as registry credentials.");
-            }
+            ValidateRegistryCredentials(token, username, password);
 
             registryCredentials = new JsonObject { ["username"] = username, ["password"] = password };
             registryFingerprint = Fingerprint(token, $"registry:{username}:{password}");
@@ -129,6 +126,14 @@ internal static class RailwayDeploymentPipeline
     }
 
     private static string Fingerprint(string key, string value) => Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(key), Encoding.UTF8.GetBytes(value)));
+
+    internal static void ValidateRegistryCredentials(string token, string username, string password)
+    {
+        if (username.Contains(token, StringComparison.Ordinal) || password.Contains(token, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Railway control-plane credentials cannot be used as registry credentials.");
+        }
+    }
 
     internal static Dictionary<string, string> GetSealedFingerprints(string resourceName, string token, IEnumerable<string> names, IReadOnlyDictionary<string, string> environment)
     {
