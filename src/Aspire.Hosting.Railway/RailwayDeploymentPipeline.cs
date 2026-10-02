@@ -114,8 +114,7 @@ internal static class RailwayDeploymentPipeline
             registryFingerprint = Fingerprint(token, $"registry:{username}:{password}");
         }
 
-        Dictionary<string, string> sealedFingerprints = annotation.Options.SealedVariables.ToDictionary(
-            name => name, name => Fingerprint(token, $"variable:{name}:{environment[name]}"), StringComparer.Ordinal);
+        Dictionary<string, string> sealedFingerprints = GetSealedFingerprints(resource.Name, token, annotation.Options.SealedVariables, environment);
         RailwayServiceResult result = await new RailwayServiceReconciler(client).ApplyAsync(
             target, resource.Name, annotation.Options.ServiceName ?? resource.Name, image, annotation.Options, environment, section.Data,
             () => manager.SaveSectionAsync(section, context.CancellationToken), context.CancellationToken,
@@ -130,6 +129,22 @@ internal static class RailwayDeploymentPipeline
     }
 
     private static string Fingerprint(string key, string value) => Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(key), Encoding.UTF8.GetBytes(value)));
+
+    internal static Dictionary<string, string> GetSealedFingerprints(string resourceName, string token, IEnumerable<string> names, IReadOnlyDictionary<string, string> environment)
+    {
+        Dictionary<string, string> fingerprints = new(StringComparer.Ordinal);
+        foreach (string name in names)
+        {
+            if (!environment.TryGetValue(name, out string? value))
+            {
+                throw new InvalidOperationException($"Sealed Railway variable '{name}' is not supplied by resource '{resourceName}'.");
+            }
+
+            fingerprints[name] = Fingerprint(token, $"variable:{name}:{value}");
+        }
+
+        return fingerprints;
+    }
 
     private static string GetRetainedImage(IResource resource)
     {

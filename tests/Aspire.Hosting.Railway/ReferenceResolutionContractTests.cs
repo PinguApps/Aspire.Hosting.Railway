@@ -5,6 +5,17 @@ namespace Aspire.Hosting.Railway.Tests;
 
 public sealed class ReferenceResolutionContractTests
 {
+    [Fact]
+    public void MissingSealedValueNamesTheVariableAndResourceWithoutLeakingOtherValues()
+    {
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => RailwayDeploymentPipeline.GetSealedFingerprints(
+            "web", "secret-token", ["MISSING"], new Dictionary<string, string> { ["OTHER"] = "secret-value" }));
+        Assert.Contains("MISSING", error.Message, StringComparison.Ordinal);
+        Assert.Contains("web", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-token", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-value", error.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
