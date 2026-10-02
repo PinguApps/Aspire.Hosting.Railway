@@ -32,6 +32,7 @@ internal sealed class RailwayServiceReconciler
         string serviceId = (string)instance["serviceId"]!;
         JsonObject variables = await _client.ReadVariablesAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateOwnership(variables, target.SiteKey, resourceName, serviceId, options, identity);
+        ValidateUnspecifiedRegion(instance, options);
         ValidateVolumeDrift(environment, serviceId, options, identity);
         JsonObject domains = await ReadDomainsAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateDomainDrift(domains, options);
@@ -54,6 +55,7 @@ internal sealed class RailwayServiceReconciler
         string? registryFingerprint = null,
         IReadOnlyDictionary<string, string>? sealedFingerprints = null)
     {
+        Stopwatch overall = Stopwatch.StartNew();
         await _client.ValidateScopeAsync(target, cancellationToken).ConfigureAwait(false);
         ValidateCachedScope(identity, target, serviceName);
         JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
@@ -111,6 +113,7 @@ internal sealed class RailwayServiceReconciler
         instance = FindService(environment, serviceName, serviceId)
             ?? throw new InvalidOperationException("Created Railway service is not visible in the expected environment.");
         JsonObject currentVariables = await _client.ReadVariablesAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
+        ValidateUnspecifiedRegion(instance, options);
         ValidateVolumeDrift(environment, serviceId, options, identity);
         JsonObject plannedDomains = await ReadDomainsAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateDomainDrift(plannedDomains, options);
@@ -183,37 +186,51 @@ internal sealed class RailwayServiceReconciler
             || deploymentId is null || options.WaitForCompletion || pending;
         if (deploy)
         {
-            if (deploymentId is null)
+            bool initial = deploymentId is null;
+            HashSet<string> baseline = initial ? await ReadDeploymentIdsAsync(target, serviceId, cancellationToken).ConfigureAwait(false) : [];
+            do
             {
-                await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeploy(serviceId:$service,environmentId:$environment)}",
-                    new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-                Stopwatch discovery = Stopwatch.StartNew();
-                while (deploymentId is null && discovery.Elapsed < options.DeploymentTimeout)
+                if (initial)
                 {
-                    JsonObject refreshed = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
-                    deploymentId = (string?)FindService(refreshed, serviceName, serviceId)?["latestDeployment"]?["id"];
-                    if (deploymentId is null)
+                    deploymentId = await DiscoverInitialDeploymentAsync(target, serviceId, baseline, deploymentId, cancellationToken).ConfigureAwait(false);
+                    if (deploymentId is not null)
                     {
-                        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                        break;
                     }
                 }
 
-                if (deploymentId is null)
+                try
                 {
-                    throw new TimeoutException("Railway did not expose the initial deployment within its completion deadline.");
+                    JsonObject deployed = await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeployV2(serviceId:$service,environmentId:$environment)}",
+                        new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
+                    deploymentId = (string)deployed["serviceInstanceDeployV2"]!;
                 }
-            }
-            else
+                catch (RailwayDeploymentNotFoundException) when (initial)
+                {
+                }
+
+                if (initial)
+                {
+                    deploymentId = await DiscoverInitialDeploymentAsync(target, serviceId, baseline, deploymentId, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (deploymentId is not null)
+                {
+                    break;
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            } while (overall.Elapsed < options.DeploymentTimeout);
+
+            if (deploymentId is null)
             {
-                JsonObject deployed = await _client.SendAsync("mutation($service:String!,$environment:String!){serviceInstanceDeployV2(serviceId:$service,environmentId:$environment)}",
-                    new { service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-                deploymentId = (string)deployed["serviceInstanceDeployV2"]!;
+                throw new TimeoutException("Railway did not establish an unambiguous initial deployment within its deadline. Retry the pending deployment.");
             }
         }
 
         if (options.CronSchedule is null || deploy)
         {
-            await WaitForDeploymentAsync(target, serviceId, deploymentId!, options, cancellationToken).ConfigureAwait(false);
+            await WaitForDeploymentAsync(target, serviceId, deploymentId!, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
         }
 
         identity["pending"] = false;
@@ -274,6 +291,25 @@ internal sealed class RailwayServiceReconciler
         }
     }
 
+    private async Task<string?> DiscoverInitialDeploymentAsync(RailwayResolvedTarget target, string serviceId, HashSet<string> baseline, string? expectedId, CancellationToken cancellationToken)
+    {
+        HashSet<string> observed = await ReadDeploymentIdsAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
+        string[] added = [.. observed.Except(baseline, StringComparer.Ordinal)];
+        if (added.Length > 1 || (added.Length == 1 && expectedId is not null && added[0] != expectedId))
+        {
+            throw new InvalidOperationException("Initial Railway deployment identity is ambiguous. Refusing to follow an unrelated deployment.");
+        }
+
+        return expectedId ?? added.SingleOrDefault();
+    }
+
+    private async Task<HashSet<string>> ReadDeploymentIdsAsync(RailwayResolvedTarget target, string serviceId, CancellationToken cancellationToken)
+    {
+        JsonObject data = await _client.SendAsync("query($input:DeploymentListInput!){deployments(input:$input,first:20){edges{node{id}}}}",
+            new { input = new { projectId = target.ProjectId, environmentId = target.EnvironmentId, serviceId, includeDeleted = true } }, cancellationToken).ConfigureAwait(false);
+        return [.. data["deployments"]!["edges"]!.AsArray().Select(edge => (string)edge!["node"]!["id"]!)];
+    }
+
     private Task<JsonObject> ReadEnvironmentAsync(RailwayResolvedTarget target, CancellationToken cancellationToken) => ReadEnvironmentCoreAsync(target, cancellationToken);
 
     private async Task<JsonObject> ReadEnvironmentCoreAsync(RailwayResolvedTarget target, CancellationToken cancellationToken)
@@ -321,6 +357,15 @@ internal sealed class RailwayServiceReconciler
         }
 
         return settings;
+    }
+
+    private static void ValidateUnspecifiedRegion(JsonObject instance, RailwayServiceOptions options)
+    {
+        if (options.Region is null && instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"] is JsonObject regions
+            && (regions.Count > 1 || regions.Any(region => (int?)region.Value?["numReplicas"] > 1)))
+        {
+            throw new InvalidOperationException("An existing multi-region or multi-replica service requires an explicit single Railway region before reconciliation.");
+        }
     }
 
     private static bool SettingsMatch(JsonObject actual, JsonObject desired)
@@ -461,10 +506,10 @@ internal sealed class RailwayServiceReconciler
         return true;
     }
 
-    private async Task WaitForDeploymentAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, RailwayServiceOptions options, CancellationToken cancellationToken)
+    private async Task WaitForDeploymentAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, RailwayServiceOptions options, TimeSpan timeout, CancellationToken cancellationToken)
     {
         Stopwatch timer = Stopwatch.StartNew();
-        while (timer.Elapsed < options.DeploymentTimeout)
+        while (timer.Elapsed < timeout)
         {
             JsonObject data = await _client.SendAsync("query($id:String!){deployment(id:$id){projectId environmentId serviceId status deploymentStopped instances{id status}}}",
                 new { id = deploymentId }, cancellationToken).ConfigureAwait(false);

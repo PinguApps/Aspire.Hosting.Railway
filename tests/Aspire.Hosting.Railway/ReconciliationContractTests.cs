@@ -80,6 +80,25 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
+    public async Task InitialDeploymentRetriesOnlyTheKnownMissingDeploymentResponse()
+    {
+        using Provider provider = new() { InitialMissingResponses = 1 };
+        RailwayServiceResult result = await ApplyAsync(provider, new(), []);
+        Assert.Equal("deployment", result.DeploymentId);
+        Assert.Equal(2, provider.DeployRequests);
+        Assert.Equal(1, provider.Creates);
+    }
+
+    [Fact]
+    public async Task InitialDeploymentRejectsConcurrentAmbiguousIdentities()
+    {
+        using Provider provider = new() { AmbiguousInitialDeployments = true };
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync(provider, new(), []));
+        Assert.Contains("ambiguous", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, provider.DeployRequests);
+    }
+
+    [Fact]
     public async Task AmbiguousCreateResponseRecoversOnlyItsRecordedClaim()
     {
         using Provider provider = new() { FailCreateResponse = true };
@@ -269,6 +288,9 @@ public sealed class ReconciliationContractTests
         internal bool FailNextDeploy { get; set; }
         internal bool FailCreateResponse { get; set; }
         internal int DeployRequests { get; private set; }
+        internal int InitialMissingResponses { get; set; }
+        internal bool AmbiguousInitialDeployments { get; set; }
+        private readonly JsonArray _deploymentIds = [];
         internal JsonNode? LastPatch { get; private set; }
         internal JsonObject Regions { get; private set; } = new() { ["sfo"] = new JsonObject { ["numReplicas"] = 1 } };
         internal string Status { get; set; } = "SUCCESS";
@@ -314,6 +336,10 @@ public sealed class ReconciliationContractTests
                     ["serviceInstances"] = new JsonObject { ["edges"] = _service is null ? [] : new JsonArray(new JsonObject { ["node"] = _service.DeepClone() }) },
                     ["volumeInstances"] = new JsonObject { ["edges"] = Volumes.DeepClone() },
                 };
+            }
+            else if (query.Contains("deployments(input:", StringComparison.Ordinal))
+            {
+                data["deployments"] = new JsonObject { ["edges"] = _deploymentIds.DeepClone() };
             }
             else if (query.Contains("{variables(", StringComparison.Ordinal))
             {
@@ -376,13 +402,23 @@ public sealed class ReconciliationContractTests
             else if (query.Contains("serviceInstanceDeploy", StringComparison.Ordinal))
             {
                 DeployRequests++;
+                if (InitialMissingResponses > 0)
+                {
+                    InitialMissingResponses--;
+                    return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "Deployment not found" }) });
+                }
                 if (FailNextDeploy)
                 {
                     FailNextDeploy = false;
                     return Response(new JsonObject { ["errors"] = new JsonArray(new JsonObject { ["message"] = "provider-secret" }) });
                 }
                 if (query.Contains("serviceInstanceDeployV2", StringComparison.Ordinal))
-                { data["serviceInstanceDeployV2"] = "deployment"; }
+                {
+                    _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = "deployment" } });
+                    if (AmbiguousInitialDeployments)
+                    { _deploymentIds.Add(new JsonObject { ["node"] = new JsonObject { ["id"] = "operator-deployment" } }); }
+                    data["serviceInstanceDeployV2"] = "deployment";
+                }
                 else
                 { data["serviceInstanceDeploy"] = true; }
             }

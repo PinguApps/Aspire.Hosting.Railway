@@ -4,6 +4,16 @@
 
 `RailwayTargetOptionsDto.AuthenticationMode` defaults to `ProjectToken`. Explicit `Bearer` mode also requires `ExpectedProjectName` and `ExpectedWorkspaceId` from the allocation record. Project-token authentication validates the exact project/environment scope before writes.
 
+| Target input / option | Type | Default / constraint |
+| --- | --- | --- |
+| `projectId` | Parameter resource | Required recorded project ID. |
+| `environmentId` | Parameter resource | Required recorded environment ID. |
+| `apiToken` | Secret parameter resource | Required current infrastructure credential; never a workload variable. |
+| `siteKey` | Parameter resource | Required recorded key matching the existing shared `PINGUAPPS_SITE_KEY`. |
+| `AuthenticationMode` | `RailwayAuthenticationMode` | `ProjectToken`; explicit `Bearer` is account/workspace authentication. |
+| `ExpectedProjectName` | Nullable string | Required in `Bearer` mode. |
+| `ExpectedWorkspaceId` | Nullable string | Required in `Bearer` mode. |
+
 C# callbacks use `RailwayServiceOptions`; TypeScript uses callback-free `RailwayServiceOptionsDto`, with camel-case properties. Exactly one replica is published.
 
 | Option | Default | Meaning / constraint |
@@ -14,7 +24,7 @@ C# callbacks use `RailwayServiceOptions`; TypeScript uses callback-free `Railway
 | `ExistingServiceId` | Unset | Required to explicitly adopt an unmarked existing service. |
 | `StartCommand` | Image default | Optional container command override. |
 | `RestartPolicy` | `OnFailure` | `Never`, `OnFailure`, or `Always`. |
-| `RestartPolicyMaxRetries` | `3` | Non-negative restart retry limit. |
+| `RestartPolicyMaxRetries` | `3` | At least 1 for restarting policies. `Never` accepts 0 and omits this provider setting. |
 | `DeploymentTimeout` | 10 minutes | Positive C# `TimeSpan`; TypeScript uses `deploymentTimeoutSeconds` (default 600). |
 | `WaitForCompletion` | `false` | Finite execution; requires `Never` restart and no cron schedule. |
 | `CronSchedule` | Unset | UTC schedule for an executable that exits; requires `Never`. Use Jobs for schedule validation. |
@@ -23,10 +33,14 @@ C# callbacks use `RailwayServiceOptions`; TypeScript uses callback-free `Railway
 | `CustomDomains` | Empty | Requested hostnames; DNS configuration remains external. |
 | `HealthCheckPath` | Unset | Readiness path beginning with `/`. |
 | `Region` | Provider default | Supported names listed below. |
-| `MemoryGB` / `VCpus` | Provider default | Positive resource limits. |
+| `MemoryGB` / `VCpus` | Provider default | Positive finite numeric resource limits. |
 | `SleepApplication` | `false` | Explicit serverless sleeping; active brokers/workers may prevent sleep. |
 | `Volumes` | Empty | Persistent mounts with unique absolute `MountPath` values below `/`, without `..` segments. |
-| `SealedVariables` | Empty | Names of runtime variables to seal; values come from normal Aspire environment bindings. |
+| `SealedVariables` | Empty | Unique, non-empty runtime names to seal. Ownership names beginning `PINGUAPPS_` and control-plane credential names are reserved. |
+| `RegistryUsername` / `RegistryPassword` | Unset | C# parameter resources, both required together; password must be secret. TypeScript uses `withRailwayRegistryCredentials`. |
+| `DeploymentDependsOn` | Empty | C# resource collection of required Railway deployments. TypeScript uses `withRailwayDeploymentDependency`. |
+
+Service identity, image, command, schedule, path and region fields are nullable strings; port/retries are integers, limits are doubles, flags are booleans, and domain/sealed-name collections contain strings. `Volumes` contains `RailwayVolumeOptions` with a string `MountPath`. The DTO exposes nullable scalar overrides and arrays, inheriting the same defaults when omitted.
 
 Internal regions `ams`, `sfo`, `iad`, and `sin` also accept public aliases `europe-west4-drams3a`, `us-west2`, `us-east4-eqdc4a`, and `asia-southeast1-eqsg3a`, respectively. Existing volume region/mount drift requires operator migration; deployment never deletes or moves data.
 

@@ -6,6 +6,16 @@ namespace Aspire.Hosting.Railway.Tests;
 public sealed class ReferenceResolutionContractTests
 {
     [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void ResourceLimitsMustBeFiniteBeforePublishing(double limit)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => RailwayServiceValidation.Validate(new() { MemoryGB = limit }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => RailwayServiceValidation.Validate(new() { VCpus = limit }));
+    }
+
+    [Theory]
     [InlineData(EndpointProperty.Host, "broker.railway.internal")]
     [InlineData(EndpointProperty.Port, "5672")]
     [InlineData(EndpointProperty.TargetPort, "5672")]

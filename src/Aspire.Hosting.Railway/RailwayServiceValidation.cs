@@ -41,7 +41,9 @@ internal static partial class RailwayServiceValidation
 
         if (options.Port is < 1 or > 65535 || options.RestartPolicyMaxRetries < 0
             || (options.RestartPolicy != RailwayRestartPolicy.Never && options.RestartPolicyMaxRetries == 0) || options.DeploymentTimeout <= TimeSpan.Zero
-            || options.MemoryGB is <= 0 || options.VCpus is <= 0)
+            || options.MemoryGB is <= 0 || options.VCpus is <= 0
+            || (options.MemoryGB is double memory && !double.IsFinite(memory))
+            || (options.VCpus is double cpu && !double.IsFinite(cpu)))
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Ports, resource limits, retries and timeouts must be valid.");
         }

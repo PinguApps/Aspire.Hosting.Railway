@@ -15,14 +15,16 @@ dotnet add package PinguApps.Aspire.Hosting.Railway --version 1.0.0
 ```csharp
 using Aspire.Hosting.Railway;
 
-var target = builder.AddRailwayTarget("railway",
-    builder.AddParameter("railway-project-id"),
-    builder.AddParameter("railway-environment-id"),
-    builder.AddParameter("railway-api-token", secret: true),
-    builder.AddParameter("site-key"));
+var web = builder.AddProject<Projects.Web>("web");
+if (builder.ExecutionContext.IsPublishMode)
+{
+    var target = builder.AddRailwayTarget("railway",
+        builder.AddParameter("railway-project-id", Current("Parameters__railway_project_id")),
+        builder.AddParameter("railway-environment-id", Current("Parameters__railway_environment_id")),
+        builder.AddParameter("railway-api-token", Current("Parameters__railway_api_token"), secret: true),
+        builder.AddParameter("site-key", Current("Parameters__site_key")));
 
-var web = builder.AddProject<Projects.Web>("web")
-    .PublishToRailway(target, options =>
+    web.PublishToRailway(target, options =>
     {
         options.Image = release.WebImage; // ghcr.io/...@sha256:...
         options.Port = 8080;
@@ -33,6 +35,10 @@ var web = builder.AddProject<Projects.Web>("web")
         options.VCpus = 1;
         options.SealedVariables.Add("ConnectionStrings__database");
     });
+}
+
+string Current(string name) => Environment.GetEnvironmentVariable(name)
+    ?? throw new InvalidOperationException($"Missing deployment input: {name}");
 ```
 
 Before deployment, set the environment's shared `PINGUAPPS_SITE_KEY` to its allocation record's site key. The package never creates projects, environments, or allocation records. Default authentication uses an environment-scoped project token and validates its exact scope and the live site marker before writes.
@@ -59,19 +65,27 @@ The read-only target plan validates all declared services before provider mutati
 ```typescript
 import { createBuilder, railwayOwnershipMode } from "./.aspire/modules/aspire.mjs";
 const builder = await createBuilder();
-const project = await builder.addParameter("railway-project-id");
-const environment = await builder.addParameter("railway-environment-id");
-const token = await builder.addParameter("railway-api-token", { secret: true });
-const site = await builder.addParameter("site-key");
-const target = await builder.addRailwayTarget("railway", project, environment, token, site);
 let web = await builder.addContainer("web", "example/web");
-web = await web.publishToRailway(target, {
-  image: "ghcr.io/example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  ownershipMode: railwayOwnershipMode.createOrAdopt,
-  port: 8080, publicDomain: true, healthCheckPath: "/health"
-});
+if (await builder.executionContext().isPublishMode()) {
+  const project = await builder.addParameter("railway-project-id", { value: current("Parameters__railway_project_id") });
+  const environment = await builder.addParameter("railway-environment-id", { value: current("Parameters__railway_environment_id") });
+  const token = await builder.addParameter("railway-api-token", { value: current("Parameters__railway_api_token"), secret: true });
+  const site = await builder.addParameter("site-key", { value: current("Parameters__site_key") });
+  const target = await builder.addRailwayTarget("railway", project, environment, token, site);
+  web = await web.publishToRailway(target, {
+    image: "ghcr.io/example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ownershipMode: railwayOwnershipMode.createOrAdopt,
+    port: 8080, publicDomain: true, healthCheckPath: "/health"
+  });
+}
 const app = await builder.build();
 await app.run();
+
+function current(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing deployment input: ${name}`);
+  return value;
+}
 ```
 
 The [packed fixture](tests/Aspire.Hosting.Railway/Fixtures/TypeScriptAppHost) validates actual NuGet-generated exports. Explicitly declare this package alongside companion packages so the shared target API is generated.
