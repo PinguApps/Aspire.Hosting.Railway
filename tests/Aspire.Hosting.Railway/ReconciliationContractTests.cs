@@ -37,6 +37,20 @@ public sealed class ReconciliationContractTests
         Assert.Null(identity["deploymentAttempt"]);
     }
 
+    [Fact]
+    public async Task ChangedOrdinaryIntentRemovesVariablesFromAnUncertainAcceptedPatch()
+    {
+        using Provider provider = new() { LoseNextDeployResponse = true };
+        JsonObject identity = [];
+        await Assert.ThrowsAsync<HttpRequestException>(() => ApplyAsync(provider, new(), identity,
+            variables: new(StringComparer.Ordinal) { ["REMOVED"] = "runtime-value" }));
+        Assert.Contains("REMOVED", identity["deploymentAttempt"]!["managedVariables"]!.AsArray().Select(name => (string)name!));
+        await ApplyAsync(provider, new(), identity);
+        Assert.False(provider.HasVariable("REMOVED"));
+        Assert.True(provider.LastPatch!["variables"]!.AsObject().ContainsKey("REMOVED"));
+        Assert.Null(provider.LastPatch["variables"]!["REMOVED"]);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -659,11 +673,11 @@ public sealed class ReconciliationContractTests
         return reconciler.PreflightAsync(Target(), "web", "web", Image, options, identity, TestContext.Current.CancellationToken);
     }
 
-    private static Task<RailwayServiceResult> ApplyAsync(Provider provider, RailwayServiceOptions options, JsonObject identity, string image = Image, Func<Task>? saveIdentity = null)
+    private static Task<RailwayServiceResult> ApplyAsync(Provider provider, RailwayServiceOptions options, JsonObject identity, string image = Image, Func<Task>? saveIdentity = null, Dictionary<string, string>? variables = null)
     {
         HttpClient httpClient = new(provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
-        return reconciler.ApplyAsync(Target(), "web", "web", image, options, new(StringComparer.Ordinal), identity, saveIdentity ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
+        return reconciler.ApplyAsync(Target(), "web", "web", image, options, variables ?? new(StringComparer.Ordinal), identity, saveIdentity ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
     }
 
     private sealed class Provider : HttpMessageHandler
@@ -709,6 +723,8 @@ public sealed class ReconciliationContractTests
         internal bool ContainsVariable(string name) => _variables.ContainsKey(name) || _sealedNames.Contains(name);
 
         internal void SetUnmanagedVariable(string name, string value) => _variables[name] = value;
+
+        internal bool HasVariable(string name) => _variables.ContainsKey(name);
 
         internal void SetConfiguredImage(string image) => _service!["source"] = new JsonObject { ["image"] = image };
 

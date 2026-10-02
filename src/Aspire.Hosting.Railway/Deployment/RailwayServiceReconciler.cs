@@ -87,6 +87,14 @@ internal sealed class RailwayServiceReconciler
                 throw new InvalidOperationException("A pending finite Railway deployment has different desired configuration or credentials. Reconcile its recorded execution before requesting another process.");
             }
 
+            if ((bool?)priorAttempt["sent"] == true && priorAttempt["managedVariables"] is JsonArray attemptedNames)
+            {
+                IEnumerable<string> previousNames = identity["managedVariables"] is JsonArray names
+                    ? names.Select(name => (string)name!) : [];
+                identity["managedVariables"] = new JsonArray([.. previousNames.Concat(attemptedNames.Select(name => (string)name!))
+                    .Distinct(StringComparer.Ordinal).Select(name => JsonValue.Create(name))]);
+            }
+
             identity.Remove("deploymentAttempt");
             await saveIdentity().ConfigureAwait(false);
         }
@@ -327,6 +335,7 @@ internal sealed class RailwayServiceReconciler
             { throw new InvalidOperationException("The recorded configuration deployment requires its desired patch and request marker before it can be retried."); }
             JsonObject servicePatch = patch["services"]![serviceId]!.AsObject();
             JsonObject patchVariables = servicePatch["variables"]!.AsObject();
+            attempt["managedVariables"] = new JsonArray([.. patchVariables.Where(variable => variable.Value is not null).Select(variable => JsonValue.Create(variable.Key))]);
             patchVariables["PINGUAPPS_DEPLOYMENT_REQUEST"] = new JsonObject { ["value"] = requestId, ["isSealed"] = false };
             attempt["sent"] = true;
             await saveIdentity().ConfigureAwait(false);
