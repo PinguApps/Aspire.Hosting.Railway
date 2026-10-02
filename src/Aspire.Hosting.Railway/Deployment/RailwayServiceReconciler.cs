@@ -123,7 +123,9 @@ internal sealed class RailwayServiceReconciler
         JsonObject settings = DesiredSettings(image, options);
         bool settingsChanged = !SettingsMatch(instance, settings)
             || (string?)identity["registryFingerprint"] != registryFingerprint;
-        bool variablesChanged = variables.Any(pair => options.SealedVariables.Contains(pair.Key, StringComparer.Ordinal)
+        string[] removedVariables = identity["managedVariables"] is JsonArray managedVariables
+            ? [.. managedVariables.Select(name => (string)name!).Where(name => !variables.ContainsKey(name))] : [];
+        bool variablesChanged = removedVariables.Length != 0 || variables.Any(pair => options.SealedVariables.Contains(pair.Key, StringComparer.Ordinal)
             ? (string?)identity["sealedFingerprints"]?[pair.Key] != sealedFingerprints?[pair.Key]
             : (string?)currentVariables[pair.Key] != pair.Value);
         bool volumesChanged = await EnsureVolumesAsync(target, environment, serviceId, options, identity, saveIdentity, cancellationToken).ConfigureAwait(false);
@@ -157,6 +159,11 @@ internal sealed class RailwayServiceReconciler
                     patchVariables[variable.Key] = new JsonObject { ["value"] = variable.Value, ["isSealed"] = options.SealedVariables.Contains(variable.Key, StringComparer.Ordinal) };
                 }
 
+                foreach (string name in removedVariables)
+                {
+                    patchVariables[name] = null;
+                }
+
                 patchService["variables"] = patchVariables;
             }
 
@@ -164,6 +171,7 @@ internal sealed class RailwayServiceReconciler
             await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:true)}",
                 new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
             identity["registryFingerprint"] = registryFingerprint;
+            identity["managedVariables"] = new JsonArray([.. variables.Keys.Select(name => JsonValue.Create(name))]);
             if (sealedFingerprints is not null)
             {
                 JsonObject fingerprints = [];

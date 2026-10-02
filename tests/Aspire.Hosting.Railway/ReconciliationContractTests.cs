@@ -171,6 +171,30 @@ public sealed class ReconciliationContractTests
     }
 
     [Fact]
+    public async Task RemovedManagedVariablesAreDeletedWithoutTouchingUnrelatedProviderValues()
+    {
+        using Provider provider = new();
+        JsonObject identity = [];
+        RailwayServiceOptions options = new();
+        options.SealedVariables.Add("OLD_SECRET");
+        using HttpClient http = new(provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(http, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        await reconciler.ApplyAsync(Target(), "web", "web", Image, options,
+            new() { ["OLD_PLAIN"] = "old-value", ["OLD_SECRET"] = "old-secret" }, identity, () => Task.CompletedTask,
+            TestContext.Current.CancellationToken, sealedFingerprints: new Dictionary<string, string> { ["OLD_SECRET"] = "secret-hash" });
+        provider.SetUnmanagedVariable("UNRELATED", "keep-this");
+        Assert.True(provider.ContainsVariable("OLD_PLAIN"));
+        Assert.True(provider.ContainsVariable("OLD_SECRET"));
+        await ApplyAsync(provider, new(), identity);
+        Assert.False(provider.ContainsVariable("OLD_PLAIN"));
+        Assert.False(provider.ContainsVariable("OLD_SECRET"));
+        Assert.True(provider.ContainsVariable("UNRELATED"));
+        Assert.False(provider.LastPatch!["variables"]!.AsObject().ContainsKey("UNRELATED"));
+        Assert.DoesNotContain("old-secret", identity.ToJsonString(), StringComparison.Ordinal);
+        Assert.False((await ApplyAsync(provider, new(), identity)).Deployed);
+    }
+
+    [Fact]
     public async Task MissingCachedIdentityCannotFallBackToName()
     {
         using Provider provider = new();
@@ -379,6 +403,11 @@ public sealed class ReconciliationContractTests
         internal JsonArray TcpProxies { get; } = [];
         private JsonObject? _service;
         private readonly JsonObject _variables = [];
+        private readonly HashSet<string> _sealedNames = new(StringComparer.Ordinal);
+
+        internal bool ContainsVariable(string name) => _variables.ContainsKey(name) || _sealedNames.Contains(name);
+
+        internal void SetUnmanagedVariable(string name, string value) => _variables[name] = value;
 
         internal void CreateService(bool marked)
         {
@@ -482,8 +511,21 @@ public sealed class ReconciliationContractTests
                 {
                     foreach (KeyValuePair<string, JsonNode?> variable in variables)
                     {
-                        if ((bool?)variable.Value!["isSealed"] != true)
-                        { _variables[variable.Key] = variable.Value!["value"]!.DeepClone(); }
+                        if (variable.Value is null)
+                        {
+                            _variables.Remove(variable.Key);
+                            _sealedNames.Remove(variable.Key);
+                        }
+                        else if ((bool?)variable.Value["isSealed"] == true)
+                        {
+                            _variables.Remove(variable.Key);
+                            _sealedNames.Add(variable.Key);
+                        }
+                        else
+                        {
+                            _sealedNames.Remove(variable.Key);
+                            _variables[variable.Key] = variable.Value["value"]!.DeepClone();
+                        }
                     }
                 }
 
