@@ -1,5 +1,7 @@
 # PinguApps.Aspire.Hosting.Railway
 
+[![PinguApps.Aspire.Hosting.Railway version](https://img.shields.io/nuget/v/PinguApps.Aspire.Hosting.Railway?style=for-the-badge&label=PinguApps.Aspire.Hosting.Railway)](https://www.nuget.org/packages/PinguApps.Aspire.Hosting.Railway/) [![PinguApps.Aspire.Hosting.Railway downloads](https://img.shields.io/nuget/dt/PinguApps.Aspire.Hosting.Railway?style=for-the-badge&label=downloads)](https://www.nuget.org/packages/PinguApps.Aspire.Hosting.Railway/)
+
 Deploy normal Aspire projects and containers into a pre-created, site-owned Railway environment. Local development stays unchanged. Retained images deploy without building or pushing containers.
 
 ## Install
