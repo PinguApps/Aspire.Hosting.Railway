@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <PackageId>PinguApps.Aspire.Hosting.Railway</PackageId>
+    <PackageIcon>icon.png</PackageIcon>
     <AssemblyName>PinguApps.Aspire.Hosting.Railway</AssemblyName>
     <Description>Railway integration for Aspire.</Description>
     <EnableAspireIntegrationAnalyzers>true</EnableAspireIntegrationAnalyzers>
@@ -15,4 +16,7 @@
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="icon.png" Pack="true" PackagePath="/" />
+  </ItemGroup>
 </Project>
