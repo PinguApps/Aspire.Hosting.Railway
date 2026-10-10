@@ -297,10 +297,62 @@ public sealed class SourceBuildSteps : IDisposable
     public void RetainedControlFiles()
     {
         string rules = File.ReadAllText(Path.Combine(_snapshot!.ContextPath, ".railwayignore"));
-        Assert.EndsWith("!/.dockerignore\n!/jobs/\n!/jobs/Dockerfile\n", rules, StringComparison.Ordinal);
-        Assert.True(File.Exists(Path.Combine(_snapshot.ContextPath, "jobs", "Dockerfile")));
+        Assert.EndsWith("!/.dockerignore\n!/.pinguapps-railway.Dockerfile\n", rules, StringComparison.Ordinal);
+        Assert.DoesNotContain("!/jobs/", rules, StringComparison.Ordinal);
+        Assert.Equal(File.ReadAllText(Path.Combine(_context, "jobs", "Dockerfile")),
+            File.ReadAllText(Path.Combine(_snapshot.ContextPath, ".pinguapps-railway.Dockerfile")));
         Assert.True(File.Exists(Path.Combine(_snapshot.ContextPath, ".dockerignore")));
     }
+
+    [Given("a nested Dockerfile beside allowed and ignored context inputs")]
+    public void NestedSiblings()
+    {
+        ContextWithSecrets();
+        Directory.CreateDirectory(Path.Combine(_context, "jobs"));
+        File.WriteAllText(Path.Combine(_context, "jobs", "Dockerfile"), "FROM scratch\nCOPY jobs/allowed.txt /allowed\n");
+        File.WriteAllText(Path.Combine(_context, "jobs", "allowed.txt"), "allowed-input");
+        File.WriteAllText(Path.Combine(_context, "jobs", "private.txt"), "ignored-input");
+        File.WriteAllText(Path.Combine(_context, ".railwayignore"), "jobs/private.txt\n");
+    }
+
+    [Then("the original nested sibling ignore rules remain authoritative")]
+    public void OriginalSiblingRules()
+    {
+        string rules = File.ReadAllText(Path.Combine(_snapshot!.ContextPath, ".railwayignore"));
+        Assert.StartsWith("jobs/private.txt\n", rules, StringComparison.Ordinal);
+        Assert.DoesNotContain("!/jobs", rules, StringComparison.Ordinal);
+        Assert.DoesNotContain("/jobs/*", rules, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(_snapshot.ContextPath, "jobs", "allowed.txt")));
+    }
+
+    [Given("a nested Dockerfile with its own ignore file")]
+    public void SpecificIgnore()
+    {
+        NestedSiblings();
+        File.WriteAllText(Path.Combine(_context, ".dockerignore"), "root-ignore-overridden\n");
+        File.WriteAllText(Path.Combine(_context, "jobs", "Dockerfile.dockerignore"), "specific-ignore-rule\n");
+    }
+
+    [Then("the selected ignore file is staged beside the transport Dockerfile")]
+    public void StagedSpecificIgnore()
+    {
+        Assert.Equal("specific-ignore-rule\n", File.ReadAllText(Path.Combine(_snapshot!.ContextPath, ".pinguapps-railway.Dockerfile.dockerignore")));
+        string rules = File.ReadAllText(Path.Combine(_snapshot.ContextPath, ".railwayignore"));
+        Assert.StartsWith("specific-ignore-rule\n", rules, StringComparison.Ordinal);
+        Assert.DoesNotContain("root-ignore-overridden", rules, StringComparison.Ordinal);
+        Assert.EndsWith("!/.pinguapps-railway.Dockerfile.dockerignore\n", rules, StringComparison.Ordinal);
+    }
+
+    [Given("a nested Dockerfile with a reserved transport file collision")]
+    public void ReservedTransportCollision()
+    {
+        NestedSiblings();
+        File.WriteAllText(Path.Combine(_context, ".pinguapps-railway.Dockerfile"), "conflicting-input");
+    }
+
+    [When("the nested source snapshot is rejected")]
+    public async Task RejectNestedSnapshot() => _error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        RailwaySourceUpload.CreateAsync(new RailwayBuildOptions { ContextPath = _context, DockerfilePath = "jobs/Dockerfile" }, "secret-token", TestContext.Current.CancellationToken));
 
     [When("source snapshots surround an executable mode change where supported")]
     public async Task SnapshotModeChange()

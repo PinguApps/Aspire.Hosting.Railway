@@ -91,6 +91,21 @@ Feature: Railway owned Dockerfile builds
     When the nested source context is snapshotted
     Then Docker build control files are explicitly retained in the CLI upload rules
 
+  Scenario: A nested Dockerfile does not suppress allowed siblings or restore ignored siblings
+    Given a nested Dockerfile beside allowed and ignored context inputs
+    When the nested source context is snapshotted
+    Then the original nested sibling ignore rules remain authoritative
+
+  Scenario: A selected Dockerfile specific ignore file retains its precedence
+    Given a nested Dockerfile with its own ignore file
+    When the nested source context is snapshotted
+    Then the selected ignore file is staged beside the transport Dockerfile
+
+  Scenario: Reserved transport control file collisions are rejected
+    Given a nested Dockerfile with a reserved transport file collision
+    When the nested source snapshot is rejected
+    Then no source upload or provider mutation has run
+
   Scenario Outline: Railway config as code cannot override declared source deployment options
     Given a source context containing Railway config <path>
     When the source snapshot is rejected

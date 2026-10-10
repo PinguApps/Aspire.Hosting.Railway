@@ -7,6 +7,7 @@ namespace Aspire.Hosting.Railway.Deployment;
 
 internal sealed class RailwaySourceUpload : IDisposable
 {
+    private const string TransportDockerfileName = ".pinguapps-railway.Dockerfile";
     private RailwaySourceUpload(string path, string fingerprint)
     {
         ContextPath = path;
@@ -15,6 +16,15 @@ internal sealed class RailwaySourceUpload : IDisposable
 
     internal string Fingerprint { get; }
     internal string ContextPath { get; }
+
+    internal static string GetTransportDockerfilePath(RailwayBuildOptions build)
+    {
+        string path = GetSourceDockerfilePath(build);
+        return path.Contains('/', StringComparison.Ordinal) ? TransportDockerfileName : path;
+    }
+
+    private static string GetSourceDockerfilePath(RailwayBuildOptions build) => Path.GetRelativePath(
+        Path.GetFullPath(build.ContextPath), Path.GetFullPath(Path.Combine(build.ContextPath, build.DockerfilePath))).Replace('\\', '/');
 
     internal static void ValidatePaths(RailwayBuildOptions build)
     {
@@ -70,8 +80,33 @@ internal sealed class RailwaySourceUpload : IDisposable
                 hash.AppendData(SHA256.HashData(contents));
             }
 
+            string sourceDockerfile = GetSourceDockerfilePath(build);
+            string transportDockerfile = GetTransportDockerfilePath(build);
+            string selectedDockerfile = Path.Combine(path, sourceDockerfile);
+            if (!File.Exists(selectedDockerfile))
+            {
+                throw new InvalidOperationException("The Dockerfile was excluded by source-upload security rules.");
+            }
+            if (sourceDockerfile != transportDockerfile)
+            {
+                foreach (string suffix in new[] { string.Empty, ".dockerignore" })
+                {
+                    string destination = Path.Combine(path, transportDockerfile + suffix);
+                    if (Path.Exists(destination))
+                    {
+                        throw new InvalidOperationException("The source context contains a reserved Railway transport Dockerfile name. Rename that context input before publishing.");
+                    }
+                    string source = selectedDockerfile + suffix;
+                    if (File.Exists(source))
+                    {
+                        File.Copy(source, destination);
+                    }
+                }
+            }
+            hash.AppendData(Encoding.UTF8.GetBytes("dockerfile:" + transportDockerfile + "\0"));
             string ignore = string.Empty;
-            foreach (string name in new[] { ".dockerignore", ".railwayignore" })
+            string dockerIgnore = File.Exists(selectedDockerfile + ".dockerignore") ? sourceDockerfile + ".dockerignore" : ".dockerignore";
+            foreach (string name in new[] { dockerIgnore, ".railwayignore" })
             {
                 string ignorePath = Path.Combine(path, name);
                 if (File.Exists(ignorePath))
@@ -80,19 +115,12 @@ internal sealed class RailwaySourceUpload : IDisposable
                 }
             }
             ignore += "!/.dockerignore\n";
-            string dockerfilePath = Path.GetRelativePath(build.ContextPath,
-                Path.GetFullPath(Path.Combine(build.ContextPath, build.DockerfilePath))).Replace('\\', '/');
-            string[] segments = dockerfilePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            for (int index = 1; index < segments.Length; index++)
+            ignore += "!/" + transportDockerfile + "\n";
+            if (File.Exists(selectedDockerfile + ".dockerignore"))
             {
-                ignore += "!/" + string.Join('/', segments.Take(index)) + "/\n";
+                ignore += "!/" + transportDockerfile + ".dockerignore\n";
             }
-            ignore += "!/" + dockerfilePath + "\n";
             await File.WriteAllTextAsync(Path.Combine(path, ".railwayignore"), ignore, cancellationToken).ConfigureAwait(false);
-            if (!File.Exists(Path.Combine(path, build.DockerfilePath)))
-            {
-                throw new InvalidOperationException("The Dockerfile was excluded by source-upload security rules.");
-            }
             return new RailwaySourceUpload(path, "source:sha256:" + Convert.ToHexStringLower(hash.GetHashAndReset()));
         }
         catch

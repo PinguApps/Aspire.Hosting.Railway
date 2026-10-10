@@ -194,7 +194,7 @@ internal sealed class RailwayServiceReconciler
             patchService["source"] = source;
             if (options.Build is not null)
             {
-                patchService["build"] = new JsonObject { ["builder"] = "DOCKERFILE", ["dockerfilePath"] = options.Build.DockerfilePath.Replace('\\', '/') };
+                patchService["build"] = new JsonObject { ["builder"] = "DOCKERFILE", ["dockerfilePath"] = RailwaySourceUpload.GetTransportDockerfilePath(options.Build) };
             }
             settings["registryCredentials"] = registryCredentials?.DeepClone();
 
@@ -518,7 +518,7 @@ internal sealed class RailwayServiceReconciler
             if (project is not null && environment is not null && service is not null && marker is not null
                 && (expectedPatchId is null || actualPatchId is not null)
                 && (options.Build is null || (cliMessage is not null && builder == "DOCKERFILE"
-                    && dockerfile == options.Build.DockerfilePath.Replace('\\', '/'))))
+                    && dockerfile == RailwaySourceUpload.GetTransportDockerfilePath(options.Build))))
             {
                 return;
             }

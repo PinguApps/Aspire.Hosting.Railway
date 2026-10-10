@@ -136,7 +136,7 @@ internal static class RailwayDeploymentPipeline
             {
                 throw new InvalidOperationException("RAILWAY_DOCKERFILE_PATH is managed by the Railway source-build publisher.");
             }
-            environment["RAILWAY_DOCKERFILE_PATH"] = sourceBuild.DockerfilePath.Replace('\\', '/');
+            environment["RAILWAY_DOCKERFILE_PATH"] = RailwaySourceUpload.GetTransportDockerfilePath(sourceBuild);
         }
 
         if (resource is ProjectResource && annotation.Options.Port is int port)
