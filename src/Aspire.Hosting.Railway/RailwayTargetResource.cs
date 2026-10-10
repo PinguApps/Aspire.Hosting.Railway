@@ -42,6 +42,8 @@ public sealed class RailwayTargetResource : Resource
 [AspireDto]
 public sealed class RailwayTargetOptionsDto
 {
+    /// <summary>Gets or sets the Railway CLI executable used for source uploads. Requires version 5.63.1 or later.</summary>
+    public string CliPath { get; set; } = "railway";
     /// <summary>Gets or sets the token mode. Environment-scoped project tokens are the default.</summary>
     public RailwayAuthenticationMode AuthenticationMode { get; set; } = RailwayAuthenticationMode.ProjectToken;
     /// <summary>Gets or sets the expected project name from the site allocation record. Required for account mode.</summary>

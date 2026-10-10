@@ -11,6 +11,7 @@ public sealed class RailwayServiceOutputs
     private string? _privateHostname;
     private string? _publicUrl;
     private string? _deploymentId;
+    private string? _image;
 
     internal RailwayServiceOutputs(IResource resource)
     {
@@ -25,13 +26,16 @@ public sealed class RailwayServiceOutputs
     public RailwayOutputReference PublicUrl => new(_resource, "publicUrl", () => _publicUrl);
     /// <summary>Gets the exact deployment observed by the publisher.</summary>
     public RailwayOutputReference DeploymentId => new(_resource, "deploymentId", () => _deploymentId);
+    /// <summary>Gets the image reported for the exact completed deployment. Railway-built images remain Railway-managed.</summary>
+    public RailwayOutputReference Image => new(_resource, "image", () => _image);
 
-    internal void Populate(string serviceId, string hostname, string? publicUrl, string? deploymentId)
+    internal void Populate(string serviceId, string hostname, string? publicUrl, string? deploymentId, string? image = null)
     {
         _serviceId = serviceId;
         _privateHostname = hostname;
         _publicUrl = publicUrl;
         _deploymentId = deploymentId;
+        _image = image;
     }
 }
 

@@ -825,7 +825,7 @@ public sealed class ReconciliationContractTests
         return reconciler.ApplyAsync(Target(), "web", "web", image, options, variables ?? new(StringComparer.Ordinal), identity, saveIdentity ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
     }
 
-    private sealed class Provider : HttpMessageHandler
+    internal sealed class Provider : HttpMessageHandler
     {
         internal string TokenProject { get; set; } = "project";
         internal string TokenEnvironment { get; set; } = "environment";
@@ -884,6 +884,13 @@ public sealed class ReconciliationContractTests
         internal void CreateOperatorDeployment()
         {
             using HttpResponseMessage response = Deploy("environmentPatchCommit", fromSource: true);
+        }
+
+        internal string UploadSource()
+        {
+            ForcedDeploymentImage = "registry.railway.app/railway-build:retained";
+            using HttpResponseMessage response = Deploy("environmentPatchCommit", fromSource: true);
+            return (string)_deploymentIds.Last()!["node"]!["id"]!;
         }
 
         internal void CreateService(bool marked)

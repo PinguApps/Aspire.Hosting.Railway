@@ -18,6 +18,28 @@ internal static partial class RailwayServiceValidation
 
     internal static void Validate(RailwayServiceOptions options)
     {
+        if (options.Build is RailwayBuildOptions build)
+        {
+            if (options.Image is not null || options.RegistryUsername is not null || options.RegistryPassword is not null)
+            {
+                throw new ArgumentException("Railway source builds cannot also select a retained image or registry credentials.", nameof(options));
+            }
+
+            if (string.IsNullOrWhiteSpace(build.ContextPath) || string.IsNullOrWhiteSpace(build.DockerfilePath)
+                || Path.IsPathRooted(build.DockerfilePath) || build.DockerfilePath.Replace('\\', '/').Split('/').Contains("..", StringComparer.Ordinal))
+            {
+                throw new ArgumentException("Source builds require an explicit context and a Dockerfile below that context.", nameof(options));
+            }
+
+            RailwayBuildArgument[] arguments = build.BuildArguments ?? [];
+            if (arguments.Any(argument => string.IsNullOrWhiteSpace(argument.Name) || argument.Name.StartsWith("PINGUAPPS_", StringComparison.Ordinal)
+                    || argument.Name.StartsWith("RAILWAY_", StringComparison.Ordinal) || argument.Name.Contains('=', StringComparison.Ordinal) || argument.Value is null)
+                || arguments.Select(argument => argument.Name).Distinct(StringComparer.Ordinal).Count() != arguments.Length)
+            {
+                throw new ArgumentException("Build arguments must have unique non-reserved names and non-secret values.", nameof(options));
+            }
+        }
+
         if ((options.RegistryUsername is null) != (options.RegistryPassword is null) || options.RegistryPassword is { Secret: false })
         {
             throw new ArgumentException("Registry credentials require both parameters and a secret password.", nameof(options));

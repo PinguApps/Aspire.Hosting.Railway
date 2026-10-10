@@ -46,8 +46,20 @@ internal static class RailwayDeploymentPipeline
             }
 
             RailwayServiceValidation.Validate(annotation.Options);
-            string image = annotation.Options.Image ?? GetRetainedImage(candidate);
-            RailwayServiceValidation.ValidateImage(image);
+            string image;
+            if (annotation.Options.Build is RailwayBuildOptions build)
+            {
+                RailwaySourceUpload.ValidatePaths(build);
+                using CancellationTokenSource cliDeadline = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
+                cliDeadline.CancelAfter(TimeSpan.FromSeconds(20));
+                await RailwaySourceUpload.ValidateCliAsync(resource.Options.CliPath, cliDeadline.Token).ConfigureAwait(false);
+                image = "source-build";
+            }
+            else
+            {
+                image = annotation.Options.Image ?? GetRetainedImage(candidate);
+                RailwayServiceValidation.ValidateImage(image);
+            }
             DeploymentStateSection section = await manager.AcquireSectionAsync($"PinguApps.Railway.{candidate.Name}", context.CancellationToken).ConfigureAwait(false);
             string plan = await reconciler.PreflightAsync(target, candidate.Name, serviceName, image, annotation.Options, section.Data, context.CancellationToken).ConfigureAwait(false);
             context.Summary.Add($"Railway plan: {candidate.Name}", plan);
@@ -62,8 +74,15 @@ internal static class RailwayDeploymentPipeline
         string siteKey = await ResolveRequiredAsync(annotation.Target.SiteKey, valueContext, context.CancellationToken).ConfigureAwait(false);
         string token = await ResolveRequiredAsync(annotation.Target.ApiToken, valueContext, context.CancellationToken).ConfigureAwait(false);
         RailwayResolvedTarget target = new(projectId, environmentId, siteKey, annotation.Target.Options);
-        string image = annotation.Options.Image ?? GetRetainedImage(resource);
-        RailwayServiceValidation.ValidateImage(image);
+        using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
+        deadline.CancelAfter(annotation.Options.DeploymentTimeout);
+        using RailwaySourceUpload? upload = annotation.Options.Build is RailwayBuildOptions build
+            ? await RailwaySourceUpload.CreateAsync(build, token, deadline.Token).ConfigureAwait(false) : null;
+        string image = upload?.Fingerprint ?? annotation.Options.Image ?? GetRetainedImage(resource);
+        if (upload is null)
+        {
+            RailwayServiceValidation.ValidateImage(image);
+        }
         Dictionary<string, object> rawEnvironment = new(StringComparer.Ordinal);
         EnvironmentCallbackContext environmentContext = new(context.ExecutionContext, resource, rawEnvironment, context.CancellationToken)
         {
@@ -91,6 +110,23 @@ internal static class RailwayDeploymentPipeline
             environment[variable.Key] = value;
         }
 
+        foreach (RailwayBuildArgument argument in annotation.Options.Build?.BuildArguments ?? [])
+        {
+            if (environment.ContainsKey(argument.Name) || argument.Value.Contains(token, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Railway build arguments cannot override runtime variables or contain the control-plane token.");
+            }
+            environment[argument.Name] = argument.Value;
+        }
+        if (annotation.Options.Build is RailwayBuildOptions sourceBuild)
+        {
+            if (environment.ContainsKey("RAILWAY_DOCKERFILE_PATH"))
+            {
+                throw new InvalidOperationException("RAILWAY_DOCKERFILE_PATH is managed by the Railway source-build publisher.");
+            }
+            environment["RAILWAY_DOCKERFILE_PATH"] = sourceBuild.DockerfilePath.Replace('\\', '/');
+        }
+
         if (resource is ProjectResource && annotation.Options.Port is int port)
         {
             environment["ASPNETCORE_HTTP_PORTS"] = port.ToString(CultureInfo.InvariantCulture);
@@ -114,9 +150,10 @@ internal static class RailwayDeploymentPipeline
         Dictionary<string, string> sealedFingerprints = GetSealedFingerprints(resource.Name, token, annotation.Options.SealedVariables, environment);
         RailwayServiceResult result = await new RailwayServiceReconciler(client).ApplyAsync(
             target, resource.Name, annotation.Options.ServiceName ?? resource.Name, image, annotation.Options, environment, section.Data,
-            () => manager.SaveSectionAsync(section, context.CancellationToken), context.CancellationToken,
-            registryCredentials, registryFingerprint, sealedFingerprints).ConfigureAwait(false);
-        annotation.Outputs.Populate(result.ServiceId, result.PrivateHostname, result.PublicUrl, result.DeploymentId);
+            () => manager.SaveSectionAsync(section, deadline.Token), deadline.Token,
+            registryCredentials, registryFingerprint, sealedFingerprints,
+            upload is null ? null : (serviceId, requestId, cancellationToken) => upload.UploadAsync(target, serviceId, requestId, token, cancellationToken)).WaitAsync(deadline.Token).ConfigureAwait(false);
+        annotation.Outputs.Populate(result.ServiceId, result.PrivateHostname, result.PublicUrl, result.DeploymentId, result.Image);
         context.Summary.Add($"Railway service: {resource.Name}", result.ServiceId);
         if (result.PublicUrl is not null)
         {
