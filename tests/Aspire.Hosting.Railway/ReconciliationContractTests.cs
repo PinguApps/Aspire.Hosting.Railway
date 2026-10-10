@@ -844,6 +844,8 @@ public sealed class ReconciliationContractTests
         internal string? ForcedDeploymentImage { get; set; }
         internal string? ReportedImage { get; set; }
         internal bool OmitReportedImage { get; set; }
+        internal bool SourceUploaded { get; private set; }
+        internal bool WrongCliMessage { get; set; }
         internal bool WrongRequestMarker { get; set; }
         internal bool ReturnCompositePatchReference { get; set; }
         internal string? MissingCorrelationField { get; set; }
@@ -888,7 +890,7 @@ public sealed class ReconciliationContractTests
 
         internal string UploadSource()
         {
-            ForcedDeploymentImage = "registry.railway.app/railway-build:retained";
+            SourceUploaded = true;
             using HttpResponseMessage response = Deploy("environmentPatchCommit", fromSource: true);
             return (string)_deploymentIds.Last()!["node"]!["id"]!;
         }
@@ -1044,6 +1046,14 @@ public sealed class ReconciliationContractTests
                 data["deployment"] = query.Contains("deployment(id:", StringComparison.Ordinal)
                     ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["meta"] = new JsonObject { ["image"] = reportedImage, ["patchId"] = $"patch-{args["id"]}" }, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
                     : throw new InvalidOperationException($"Unexpected test operation: {query}");
+                if (SourceUploaded)
+                {
+                    JsonObject meta = data["deployment"]!["meta"]!.AsObject();
+                    meta["image"] = null;
+                    meta["imageDigest"] = "sha256:" + new string('b', 64);
+                    meta["cliMessage"] = WrongCliMessage ? "another-upload" : _deploymentMarkers[(string)args["id"]!];
+                    meta["serviceManifest"] = new JsonObject { ["build"] = LastPatch!["build"]!.DeepClone() };
+                }
                 if (query.Contains("deploymentSnapshot", StringComparison.Ordinal))
                 {
                     CorrelationReadIds.Add((string)args["id"]!);
@@ -1083,6 +1093,15 @@ public sealed class ReconciliationContractTests
                                 break;
                             case "marker":
                                 data["deploymentSnapshot"]!["variables"]!["PINGUAPPS_DEPLOYMENT_REQUEST"] = null;
+                                break;
+                            case "cliMessage":
+                                data["deployment"]!["meta"]!["cliMessage"] = null;
+                                break;
+                            case "builder":
+                                data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["builder"] = null;
+                                break;
+                            case "dockerfile":
+                                data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["dockerfilePath"] = null;
                                 break;
                         }
                     }

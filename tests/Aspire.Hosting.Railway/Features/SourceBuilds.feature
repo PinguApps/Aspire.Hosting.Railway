@@ -6,13 +6,38 @@ Feature: Railway owned Dockerfile builds
     When the source service is published twice
     Then only one source upload has run
     And the configuration was committed without triggering a registry deployment
-    And the completed deployment exposes its Railway image
+    And the completed deployment exposes its Railway image digest
 
   Scenario: An accepted finite source upload is recovered without executing twice
     Given a Railway owned finite source service
     When an accepted upload response is lost and publication is resumed
     Then only one source upload has run
-    And the completed deployment exposes its Railway image
+    And the completed deployment exposes its Railway image digest
+
+  Scenario: Changed source content starts a new Railway build
+    Given a Railway owned source service
+    When the source content changes after successful publication
+    Then two source uploads have run
+    And the completed deployment exposes its Railway image digest
+
+  Scenario: Another upload's metadata cannot satisfy a source request
+    Given a Railway owned finite source service
+    And the upload metadata belongs to another request
+    When upload correlation is rejected and publication is resumed
+    Then only one source upload has run
+    And the sent upload remains recorded for recovery
+
+  Scenario Outline: Source proof metadata can arrive after the deployment ID
+    Given a Railway owned source service
+    And source proof <field> is temporarily absent
+    When the source service is published twice
+    Then only one source upload has run
+    And the completed deployment exposes its Railway image digest
+    Examples:
+      | field      |
+      | cliMessage |
+      | builder    |
+      | dockerfile |
 
   Scenario: Source upload refuses another environment's scoped credential
     Given a Railway owned source service

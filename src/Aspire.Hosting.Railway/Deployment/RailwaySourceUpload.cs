@@ -20,7 +20,9 @@ internal sealed class RailwaySourceUpload : IDisposable
     {
         string context = Path.GetFullPath(build.ContextPath);
         string dockerfile = Path.GetFullPath(Path.Combine(context, build.DockerfilePath));
-        if (!Directory.Exists(context) || !File.Exists(dockerfile) || !dockerfile.StartsWith(context + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        string contextPrefix = Path.EndsInDirectorySeparator(context) ? context : context + Path.DirectorySeparatorChar;
+        if (!Directory.Exists(context) || !File.Exists(dockerfile) || !dockerfile.StartsWith(contextPrefix, StringComparison.OrdinalIgnoreCase)
+            || (File.GetAttributes(context) & FileAttributes.ReparsePoint) != 0)
         {
             throw new InvalidOperationException("The Railway build context and its Dockerfile must exist below the explicit context directory.");
         }
@@ -58,6 +60,12 @@ internal sealed class RailwaySourceUpload : IDisposable
                 string destination = Path.Combine(path, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 await File.WriteAllBytesAsync(destination, contents, cancellationToken).ConfigureAwait(false);
+                if (!OperatingSystem.IsWindows())
+                {
+                    UnixFileMode mode = File.GetUnixFileMode(file);
+                    File.SetUnixFileMode(destination, mode);
+                    hash.AppendData(BitConverter.GetBytes((int)mode));
+                }
                 hash.AppendData(Encoding.UTF8.GetBytes(relative.Replace('\\', '/') + "\0"));
                 hash.AppendData(SHA256.HashData(contents));
             }
@@ -90,7 +98,7 @@ internal sealed class RailwaySourceUpload : IDisposable
         foreach (string item in Directory.EnumerateFileSystemEntries(directory))
         {
             string name = Path.GetFileName(item);
-            if (name is ".git" or ".aspire" or ".railway" or "node_modules" or "bin" or "obj" or "secrets.json"
+            if (new[] { ".git", ".aspire", ".railway", "node_modules", "bin", "obj", "secrets.json" }.Contains(name, StringComparer.OrdinalIgnoreCase)
                 || name.Equals(".env", StringComparison.OrdinalIgnoreCase) || name.StartsWith(".env.", StringComparison.OrdinalIgnoreCase))
             {
                 continue;

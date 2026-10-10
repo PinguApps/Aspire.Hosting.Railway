@@ -16,9 +16,13 @@ if (await builder.executionContext().isPublishMode()) {
   worker = await worker.withRailwayDeploymentDependency(web);
   source = await source.publishToRailway(target, { build: { contextPath: ".", dockerfilePath: "Dockerfile", buildArguments: [{ name: "RELEASE_LABEL", value: "fixture" }] }, port: 80 });
   const sourceDeployment = await source.getRailwayDeploymentId();
-  const sourceImage = await source.getRailwayImage();
+  const sourceFingerprint = await source.getRailwayBuildFingerprint();
+  const sourceDigest = await source.getRailwayImageDigest();
+  const webImage = await web.getRailwayImage();
   worker = await worker.withEnvironment("SOURCE_DEPLOYMENT", sourceDeployment);
-  worker = await worker.withEnvironment("SOURCE_IMAGE", sourceImage);
+  worker = await worker.withEnvironment("SOURCE_FINGERPRINT", sourceFingerprint);
+  worker = await worker.withEnvironment("SOURCE_DIGEST", sourceDigest);
+  worker = await worker.withEnvironment("WEB_IMAGE", webImage);
   worker = await worker.withRailwayDeploymentDependency(source);
 }
 const app = await builder.build();

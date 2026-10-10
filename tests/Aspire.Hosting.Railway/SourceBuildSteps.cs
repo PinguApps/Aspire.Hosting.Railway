@@ -18,6 +18,7 @@ public sealed class SourceBuildSteps : IDisposable
     private string? _fingerprint;
     private Exception? _error;
     private int _uploads;
+    private string _sourceFingerprint = "source:sha256:explicit-snapshot";
 
     [Given("a Railway owned source service")]
     public void SourceService() => _options.Build = new RailwayBuildOptions { ContextPath = _context };
@@ -38,6 +39,16 @@ public sealed class SourceBuildSteps : IDisposable
     [Given("an unowned Railway service already exists")]
     public void UnownedService() => _provider.CreateService(marked: false);
 
+    [Given("the upload metadata belongs to another request")]
+    public void WrongUploadMarker() => _provider.WrongCliMessage = true;
+
+    [Given("source proof (.*) is temporarily absent")]
+    public void DelayedProof(string field)
+    {
+        _provider.MissingCorrelationField = field;
+        _provider.MissingCorrelationResponses = 1;
+    }
+
     [When("the source service is published twice")]
     public async Task PublishTwice()
     {
@@ -54,15 +65,34 @@ public sealed class SourceBuildSteps : IDisposable
         _result = await ApplyAsync();
     }
 
+    [When("the source content changes after successful publication")]
+    public async Task ChangedSource()
+    {
+        await ApplyAsync();
+        _sourceFingerprint = "source:sha256:changed-snapshot";
+        _result = await ApplyAsync();
+        Assert.True(_result.Deployed);
+    }
+
     [When("the source service is rejected")]
     public async Task RejectService() => await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync());
+
+    [When("upload correlation is rejected and publication is resumed")]
+    public async Task RejectCorrelationAndResume()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync());
+    }
+
+    [Then("the sent upload remains recorded for recovery")]
+    public void PreserveSentRequest() => Assert.True((bool)_identity["deploymentAttempt"]!["sent"]!);
 
     private async Task<RailwayServiceResult> ApplyAsync(bool loseResponse = false)
     {
         using HttpClient http = new(_provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(http, "secret-token", RailwayAuthenticationMode.ProjectToken));
         return await reconciler.ApplyAsync(new RailwayResolvedTarget("project", "environment", "site", new()),
-            "web", "web", "source:sha256:explicit-snapshot", _options, [], _identity, () => Task.CompletedTask,
+            "web", "web", _sourceFingerprint, _options, [], _identity, () => Task.CompletedTask,
             TestContext.Current.CancellationToken, upload: (service, request, cancellation) =>
             {
                 Assert.Equal("service", service);
@@ -81,6 +111,9 @@ public sealed class SourceBuildSteps : IDisposable
     [Then("only one source upload has run")]
     public void SingleUpload() => Assert.Equal(1, _uploads);
 
+    [Then("two source uploads have run")]
+    public void ChangedUpload() => Assert.Equal(2, _uploads);
+
     [Then("no source upload or provider mutation has run")]
     public void NoMutations()
     {
@@ -97,8 +130,13 @@ public sealed class SourceBuildSteps : IDisposable
         Assert.Equal("DOCKERFILE", (string?)_provider.LastPatch["build"]!["builder"]);
     }
 
-    [Then("the completed deployment exposes its Railway image")]
-    public void ExactImage() => Assert.Equal("registry.railway.app/railway-build:retained", _result!.Image);
+    [Then("the completed deployment exposes its Railway image digest")]
+    public void ExactImage()
+    {
+        Assert.Null(_result!.Image);
+        Assert.Equal("sha256:" + new string('b', 64), _result.ImageDigest);
+        Assert.Equal(_sourceFingerprint, _result.BuildFingerprint);
+    }
 
     [Given("a source context containing local secrets")]
     public void ContextWithSecrets()

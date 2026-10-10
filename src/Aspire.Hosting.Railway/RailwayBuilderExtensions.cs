@@ -192,6 +192,22 @@ public static class RailwayBuilderExtensions
     [AspireExport("pinguapps.railway.project.image", MethodName = "getRailwayImage")]
     public static ReferenceExpression GetRailwayImage(this IResourceBuilder<ProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().Image}");
 
+    /// <summary>Gets the source snapshot identity associated with a completed container build.</summary>
+    [AspireExport("pinguapps.railway.container.buildFingerprint", MethodName = "getRailwayBuildFingerprint")]
+    public static ReferenceExpression GetRailwayBuildFingerprint(this IResourceBuilder<ContainerResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().BuildFingerprint}");
+
+    /// <summary>Gets the source snapshot identity associated with a completed project build.</summary>
+    [AspireExport("pinguapps.railway.project.buildFingerprint", MethodName = "getRailwayBuildFingerprint")]
+    public static ReferenceExpression GetRailwayBuildFingerprint(this IResourceBuilder<ProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().BuildFingerprint}");
+
+    /// <summary>Gets the SHA256 digest of the exact completed container image.</summary>
+    [AspireExport("pinguapps.railway.container.imageDigest", MethodName = "getRailwayImageDigest")]
+    public static ReferenceExpression GetRailwayImageDigest(this IResourceBuilder<ContainerResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().ImageDigest}");
+
+    /// <summary>Gets the SHA256 digest of the exact completed project image.</summary>
+    [AspireExport("pinguapps.railway.project.imageDigest", MethodName = "getRailwayImageDigest")]
+    public static ReferenceExpression GetRailwayImageDigest(this IResourceBuilder<ProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().ImageDigest}");
+
     /// <summary>Configures infrastructure-only pull credentials for a private container registry.</summary>
     [AspireExport("pinguapps.railway.container.registryCredentials", MethodName = "withRailwayRegistryCredentials")]
     public static IResourceBuilder<ContainerResource> WithRailwayRegistryCredentials(this IResourceBuilder<ContainerResource> builder, IResourceBuilder<ParameterResource> username, IResourceBuilder<ParameterResource> password)

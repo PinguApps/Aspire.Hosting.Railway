@@ -1,8 +1,10 @@
 # Outputs and security
 
-`GetRailwayOutputs()` exposes service ID, private hostname, public URL, and exact deployment ID. Output references participate in resource relationships. TypeScript uses `getRailwayPrivateHostname()` with explicit deployment dependencies.
+`GetRailwayOutputs()` exposes service ID, private hostname, public URL, exact deployment ID, image digest, and optional external image URI / local build fingerprint. Output references participate in resource relationships. TypeScript uses `getRailwayPrivateHostname()`, `getRailwayDeploymentId()`, `getRailwayImageDigest()`, `getRailwayBuildFingerprint()`, and `getRailwayImage()` with explicit deployment dependencies. Source builds expose a SHA256 digest and snapshot fingerprint; their external image URI is absent. A Railway-built digest does not promise portable registry access.
 
 Project tokens authenticate management requests. Registry credentials authenticate pulls. Sealed variables configure workloads. Keep these credentials distinct and separate across environments. Private pulls require an eligible Railway plan and registry credential; the [live report](live-validation.md) records what was actually verified.
+
+[Source builds](source-builds.md) use the Railway token only for control-plane configuration and the uploader process, then Railway owns the built image. They do not need external image pull credentials. Upload only a narrow context containing no secrets; the snapshot's filename exclusions and control-token scan are safeguards, not a general secret detector.
 
 Desired secret fingerprints use an infrastructure-token-keyed HMAC. Package state never stores registry passwords or sealed variable values. Provider errors suppress response bodies that could echo secrets. Package diagnostics do not log resolved secret values. Infrastructure credentials supplied as workload configuration cause refusal.
 

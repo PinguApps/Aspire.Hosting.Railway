@@ -8,6 +8,17 @@ internal static partial class RailwayServiceValidation
     [GeneratedRegex(@"\A[^\s@]+@sha256:[a-f0-9]{64}\z", RegexOptions.CultureInvariant)]
     private static partial Regex DigestPattern();
 
+    [GeneratedRegex(@"\Asha256:[a-f0-9]{64}\z", RegexOptions.CultureInvariant)]
+    private static partial Regex BuiltDigestPattern();
+
+    internal static void ValidateBuiltDigest(string? digest)
+    {
+        if (digest is null || !BuiltDigestPattern().IsMatch(digest))
+        {
+            throw new InvalidOperationException("The exact Railway source deployment does not expose a valid built image digest.");
+        }
+    }
+
     internal static void ValidateImage(string image)
     {
         if (!DigestPattern().IsMatch(image))
