@@ -132,3 +132,5 @@ Feature: Railway owned Dockerfile builds
       | retained image      |
       | escaping Dockerfile |
       | reserved argument   |
+      | PORT argument       |
+      | ASPNETCORE_HTTP_PORTS argument |

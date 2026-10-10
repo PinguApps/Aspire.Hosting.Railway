@@ -396,7 +396,13 @@ public sealed class SourceBuildSteps : IDisposable
         }
         else
         {
-            _options.Build!.BuildArguments = [new RailwayBuildArgument { Name = "RAILWAY_TOKEN", Value = "unsafe" }];
+            string name = conflict switch
+            {
+                "PORT argument" => "PORT",
+                "ASPNETCORE_HTTP_PORTS argument" => "ASPNETCORE_HTTP_PORTS",
+                _ => "RAILWAY_TOKEN",
+            };
+            _options.Build!.BuildArguments = [new RailwayBuildArgument { Name = name, Value = "unsafe" }];
         }
     }
 

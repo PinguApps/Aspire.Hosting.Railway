@@ -44,7 +44,8 @@ internal static partial class RailwayServiceValidation
 
             RailwayBuildArgument[] arguments = build.BuildArguments ?? [];
             if (arguments.Any(argument => string.IsNullOrWhiteSpace(argument.Name) || argument.Name.StartsWith("PINGUAPPS_", StringComparison.Ordinal)
-                    || argument.Name.StartsWith("RAILWAY_", StringComparison.Ordinal) || argument.Name.Contains('=', StringComparison.Ordinal) || argument.Value is null)
+                    || argument.Name.StartsWith("RAILWAY_", StringComparison.Ordinal) || argument.Name is "PORT" or "ASPNETCORE_HTTP_PORTS"
+                    || argument.Name.Contains('=', StringComparison.Ordinal) || argument.Value is null)
                 || arguments.Select(argument => argument.Name).Distinct(StringComparer.Ordinal).Count() != arguments.Length)
             {
                 throw new ArgumentException("Build arguments must have unique non-reserved names and non-secret values.", nameof(options));
