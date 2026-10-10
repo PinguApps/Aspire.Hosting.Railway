@@ -59,3 +59,18 @@ Finally delete only the disposable project in Railway. The rehearsal project was
 Real deployments exposed two provider behaviors that the implementation now handles: build metadata can initially contain default builder/path values before the requested Dockerfile configuration appears, and cached finite builds can omit the optional image digest. Request scope, snapshot marker, and CLI upload message remain mandatory; the publisher waits on the exact deployment and never fabricates an image identity.
 
 Repository checks also passed: 159 tests with zero failures or skips, and the packed TypeScript AppHost restore, typecheck, publish-step listing, and deploy dependency listing. An external subprocess rehearsal cancelled a real long-lived CLI child and verified that cancellation returned only after child termination, preserving the snapshot cleanup order.
+
+## Nested Dockerfile upload boundary regression
+
+A second disposable allocation exercised the review fix that stages nested Dockerfiles at the reserved root transport path. Both services used a Dockerfile that copied the entire uploaded context and asserted its contents during the real Railway build. Global Docker ignore rules did not exclude the `prod.secrets` sentinel, so its absence demonstrated the Railway CLI archive boundary rather than a later Docker filter.
+
+| Context case | Exact deployment | Build and HTTP proof |
+| --- | --- | --- |
+| Dockerfile parent excluded only by `.railwayignore` | `f2d07d6b-f52b-4e59-b3e9-efd176fae6f6` | SUCCESS; ignored sibling absent; HTTP 200, `IGNORED_PARENT_UPLOAD_OK` |
+| Allowed Dockerfile parent with an ignored sibling | `0056bd40-69af-43b2-9b4c-1465760a24ed` | SUCCESS; ignored sibling absent, required sibling retained, selected Dockerfile-specific ignore honored; HTTP 200, `ALLOWED_PARENT_INPUTS_OK` |
+
+The actual deployment completed 11/11 steps in 33.04 seconds. Provider configuration selected `.pinguapps-railway.Dockerfile`; the original declared nested paths were unchanged. This verifies that retaining the selected Dockerfile neither unignores its siblings nor excludes otherwise permitted application inputs.
+
+An unchanged replay using the final compiled review changes passed 11/11 steps in 5.61 seconds at 22:23:11 UTC, retaining both exact deployment IDs. Provider SUCCESS and HTTP 200 markers were reverified at 22:25:54 UTC. The second disposable project and its private task-consumer deployment state were removed after verification at 22:25:57 UTC.
+
+The final review changes also passed all 31 focused source-build scenarios and the packed TypeScript gate. The complete suite passed 164 tests with zero failures; its one optional live scoped-token test was skipped because the original disposable upload token had already been revoked. Its earlier live run and the independently authenticated real upload checks above remain recorded separately.
