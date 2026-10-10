@@ -1,0 +1,3 @@
+FROM traefik/whoami:v1.11.0
+ARG RELEASE_LABEL
+LABEL release=$RELEASE_LABEL

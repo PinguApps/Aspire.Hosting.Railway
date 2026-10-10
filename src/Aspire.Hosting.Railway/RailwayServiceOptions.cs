@@ -2,13 +2,15 @@ using Aspire.Hosting.ApplicationModel;
 
 namespace Aspire.Hosting.Railway;
 
-/// <summary>Declares an immutable container service in a Railway environment.</summary>
+/// <summary>Declares a container service in a Railway environment.</summary>
 public sealed class RailwayServiceOptions
 {
     /// <summary>Gets or sets the explicit remote service name. Defaults to the Aspire resource name.</summary>
     public string? ServiceName { get; set; }
     /// <summary>Gets or sets the retained image reference, including its sha256 digest.</summary>
     public string? Image { get; set; }
+    /// <summary>Gets or sets an opt-in Railway-owned Dockerfile build instead of a retained registry image.</summary>
+    public RailwayBuildOptions? Build { get; set; }
     /// <summary>Gets or sets the start command override.</summary>
     public string? StartCommand { get; set; }
     /// <summary>Gets or sets the ownership policy.</summary>

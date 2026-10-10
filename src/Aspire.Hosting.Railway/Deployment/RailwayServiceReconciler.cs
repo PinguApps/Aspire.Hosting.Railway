@@ -16,7 +16,10 @@ internal sealed class RailwayServiceReconciler
     internal async Task<string> PreflightAsync(RailwayResolvedTarget target, string resourceName, string serviceName, string image, RailwayServiceOptions options, JsonObject identity, CancellationToken cancellationToken)
     {
         RailwayServiceValidation.Validate(options);
-        RailwayServiceValidation.ValidateImage(image);
+        if (options.Build is null)
+        {
+            RailwayServiceValidation.ValidateImage(image);
+        }
         await _client.ValidateScopeAsync(target, cancellationToken).ConfigureAwait(false);
         ValidateCachedScope(identity, target, serviceName);
         JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
@@ -28,9 +31,10 @@ internal sealed class RailwayServiceReconciler
                 throw new InvalidOperationException("The expected existing Railway service is missing. No infrastructure will be changed.");
             }
 
-            return "Create a site-owned immutable container service.";
+            return options.Build is null ? "Create a site-owned immutable container service." : "Create a site-owned service and upload its Dockerfile build context.";
         }
 
+        ValidateSourceConfigFile(instance, options);
         string serviceId = (string)instance["serviceId"]!;
         JsonObject variables = await _client.ReadVariablesAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateOwnership(variables, target.SiteKey, resourceName, serviceId, options, identity);
@@ -38,9 +42,13 @@ internal sealed class RailwayServiceReconciler
         ValidateVolumeDrift(environment, serviceId, options, identity);
         JsonObject domains = await ReadDomainsAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateDomainDrift(domains, options);
-        return SettingsMatch(instance, DesiredSettings(image, options))
-            ? "Reuse service settings; reconcile runtime bindings and readiness."
-            : "Update the existing site's service configuration and retained image.";
+        if (SettingsMatch(instance, DesiredSettings(image, options)))
+        {
+            return options.Build is null ? "Reuse service settings; reconcile runtime bindings and readiness."
+                : "Reuse service settings; reconcile readiness and rebuild if source content, build inputs, or deployment state changed.";
+        }
+        return options.Build is null ? "Update the existing site's service configuration and retained image."
+            : "Update the existing site's service configuration and upload its Dockerfile build context.";
     }
 
     internal async Task<RailwayServiceResult> ApplyAsync(
@@ -55,15 +63,24 @@ internal sealed class RailwayServiceReconciler
         CancellationToken cancellationToken,
         JsonObject? registryCredentials = null,
         string? registryFingerprint = null,
-        IReadOnlyDictionary<string, string>? sealedFingerprints = null)
+        IReadOnlyDictionary<string, string>? sealedFingerprints = null,
+        Func<string, string, CancellationToken, Task<string>>? upload = null)
     {
         Stopwatch overall = Stopwatch.StartNew();
         RailwayServiceValidation.Validate(options);
-        RailwayServiceValidation.ValidateImage(image);
+        if (options.Build is null)
+        {
+            RailwayServiceValidation.ValidateImage(image);
+        }
+        else if (upload is null)
+        {
+            throw new InvalidOperationException("Railway source builds require a source-upload transport.");
+        }
         await _client.ValidateScopeAsync(target, cancellationToken).ConfigureAwait(false);
         ValidateCachedScope(identity, target, serviceName);
         JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
         JsonObject? instance = FindService(environment, serviceName, (string?)identity["serviceId"] ?? options.ExistingServiceId);
+        ValidateSourceConfigFile(instance, options);
         bool created = false;
         if (variables.ContainsKey("PINGUAPPS_DEPLOYMENT_REQUEST"))
         { throw new ArgumentException("PINGUAPPS_DEPLOYMENT_REQUEST is reserved for Railway deployment identity.", nameof(variables)); }
@@ -143,6 +160,7 @@ internal sealed class RailwayServiceReconciler
         environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
         instance = FindService(environment, serviceName, serviceId)
             ?? throw new InvalidOperationException("Created Railway service is not visible in the expected environment.");
+        ValidateSourceConfigFile(instance, options);
         JsonObject currentVariables = await _client.ReadVariablesAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateUnspecifiedRegion(instance, options);
         ValidateVolumeDrift(environment, serviceId, options, identity);
@@ -165,7 +183,9 @@ internal sealed class RailwayServiceReconciler
         bool limitsChanged = await EnsureLimitsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
         string? deploymentId = (string?)instance["latestDeployment"]?["id"];
         bool deploy = created || settingsChanged || variablesChanged || volumesChanged || domainsChanged || limitsChanged
-            || deploymentId is null || options.WaitForCompletion || pending;
+            || deploymentId is null || options.WaitForCompletion || pending
+            || (options.Build is not null && ((string?)identity["desiredFingerprint"] != desiredFingerprint
+                || (string?)identity["completedDeploymentId"] != deploymentId));
         JsonObject? deploymentPatch = null;
         if (deploy)
         {
@@ -173,6 +193,10 @@ internal sealed class RailwayServiceReconciler
             JsonNode? source = settings["source"];
             settings.Remove("source");
             patchService["source"] = source;
+            if (options.Build is not null)
+            {
+                patchService["build"] = new JsonObject { ["builder"] = "DOCKERFILE", ["dockerfilePath"] = RailwaySourceUpload.GetTransportDockerfilePath(options.Build) };
+            }
             settings["registryCredentials"] = registryCredentials?.DeepClone();
 
             if (settings["multiRegionConfig"] is JsonObject desiredRegions)
@@ -207,7 +231,7 @@ internal sealed class RailwayServiceReconciler
         if (deploy)
         {
             deploymentId = await LaunchOrRecoverAsync(target, serviceId, desiredFingerprint, options,
-                identity, saveIdentity, overall, deploymentPatch, cancellationToken).ConfigureAwait(false);
+                identity, saveIdentity, overall, deploymentPatch, upload, cancellationToken).ConfigureAwait(false);
         }
 
         if (deploymentPatch is not null)
@@ -230,7 +254,10 @@ internal sealed class RailwayServiceReconciler
 
         try
         {
-            await WaitForDeploymentAsync(target, serviceId, deploymentId!, image, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
+            string? deployedImage = await WaitForDeploymentAsync(target, serviceId, deploymentId!, image, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
+            identity["image"] = options.Build is null ? deployedImage : null;
+            identity["imageDigest"] = options.Build is null ? deployedImage?[(deployedImage.IndexOf('@', StringComparison.Ordinal) + 1)..] : deployedImage;
+            identity["buildFingerprint"] = options.Build is null ? null : image;
         }
         catch (RailwayDeploymentFailedException)
         {
@@ -250,8 +277,10 @@ internal sealed class RailwayServiceReconciler
         identity["pending"] = false;
         identity.Remove("deploymentAttempt");
         identity.Remove("applyPhase");
+        identity["desiredFingerprint"] = desiredFingerprint;
+        identity["completedDeploymentId"] = deploymentId;
         await saveIdentity().ConfigureAwait(false);
-        return new RailwayServiceResult(serviceId, hostname, publicDomain is null ? null : $"https://{publicDomain}", deploymentId, deploy);
+        return new RailwayServiceResult(serviceId, hostname, publicDomain is null ? null : $"https://{publicDomain}", deploymentId, deploy, (string?)identity["image"], (string?)identity["buildFingerprint"], (string?)identity["imageDigest"]);
     }
 
     private string GetDesiredFingerprint(string image, RailwayServiceOptions options, Dictionary<string, string> variables, string? registryFingerprint)
@@ -275,11 +304,17 @@ internal sealed class RailwayServiceReconciler
             ["vCPUs"] = options.VCpus,
             ["finite"] = options.WaitForCompletion,
         };
+        if (options.Build is not null)
+        {
+            desired["sourceContent"] = image;
+            desired["dockerfile"] = options.Build.DockerfilePath.Replace('\\', '/');
+        }
         return _client.Fingerprint(desired.ToJsonString());
     }
 
     private async Task<string> LaunchOrRecoverAsync(RailwayResolvedTarget target, string serviceId, string desiredFingerprint,
-        RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, Stopwatch overall, JsonObject? patch, CancellationToken cancellationToken)
+        RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, Stopwatch overall, JsonObject? patch,
+        Func<string, string, CancellationToken, Task<string>>? upload, CancellationToken cancellationToken)
     {
         JsonObject attempt;
         if (identity["deploymentAttempt"] is JsonObject recorded)
@@ -316,7 +351,7 @@ internal sealed class RailwayServiceReconciler
             {
                 if (!(bool)attempt["sent"]!)
                 { throw new InvalidOperationException("An unexpected Railway deployment appeared before the recorded request. Reconcile concurrent changes before retrying."); }
-                await ValidateDeploymentRequestAsync(target, serviceId, deploymentId, attempt, overall, options.DeploymentTimeout, cancellationToken).ConfigureAwait(false);
+                await ValidateDeploymentRequestAsync(target, serviceId, deploymentId, attempt, overall, options, cancellationToken).ConfigureAwait(false);
                 attempt["id"] = deploymentId;
                 await saveIdentity().ConfigureAwait(false);
                 return deploymentId;
@@ -334,14 +369,26 @@ internal sealed class RailwayServiceReconciler
             JsonObject patchVariables = servicePatch["variables"]!.AsObject();
             attempt["managedVariables"] = new JsonArray([.. patchVariables.Where(variable => variable.Value is not null).Select(variable => JsonValue.Create(variable.Key))]);
             patchVariables["PINGUAPPS_DEPLOYMENT_REQUEST"] = new JsonObject { ["value"] = requestId, ["isSealed"] = false };
-            attempt["sent"] = true;
-            await saveIdentity().ConfigureAwait(false);
             try
             {
-                JsonObject committed = await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:false)}",
-                    new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
-                attempt["patchId"] = (string?)committed["environmentPatchCommit"];
-                await saveIdentity().ConfigureAwait(false);
+                if (upload is not null)
+                {
+                    await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:true)}",
+                        new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
+                    attempt["sent"] = true;
+                    await saveIdentity().ConfigureAwait(false);
+                    attempt["id"] = await upload(serviceId, requestId, cancellationToken).ConfigureAwait(false);
+                    await saveIdentity().ConfigureAwait(false);
+                }
+                else
+                {
+                    attempt["sent"] = true;
+                    await saveIdentity().ConfigureAwait(false);
+                    JsonObject committed = await _client.SendAsync("mutation($environment:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environment,patch:$patch,skipDeploys:false)}",
+                        new { environment = target.EnvironmentId, patch }, cancellationToken).ConfigureAwait(false);
+                    attempt["patchId"] = (string?)committed["environmentPatchCommit"];
+                    await saveIdentity().ConfigureAwait(false);
+                }
             }
             catch (RailwayDeploymentRejectedException)
             {
@@ -412,8 +459,9 @@ internal sealed class RailwayServiceReconciler
         return expectedId ?? added.SingleOrDefault();
     }
 
-    private async Task ValidateDeploymentRequestAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, JsonObject attempt, Stopwatch overall, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task ValidateDeploymentRequestAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, JsonObject attempt, Stopwatch overall, RailwayServiceOptions options, CancellationToken cancellationToken)
     {
+        TimeSpan timeout = options.DeploymentTimeout;
         if ((string?)attempt["requestId"] is not string requestId)
         {
             if ((string?)attempt["id"] != deploymentId)
@@ -454,6 +502,9 @@ internal sealed class RailwayServiceReconciler
             string? service = (string?)deployment?["serviceId"];
             string? marker = (string?)data["deploymentSnapshot"]?["variables"]?["PINGUAPPS_DEPLOYMENT_REQUEST"];
             string? actualPatchId = (string?)deployment?["meta"]?["patchId"];
+            string? cliMessage = (string?)deployment?["meta"]?["cliMessage"];
+            string? builder = (string?)deployment?["meta"]?["serviceManifest"]?["build"]?["builder"];
+            string? dockerfile = (string?)deployment?["meta"]?["serviceManifest"]?["build"]?["dockerfilePath"];
             if ((project is not null && project != target.ProjectId) || (environment is not null && environment != target.EnvironmentId)
                 || (service is not null && service != serviceId) || (marker is not null && marker != requestId)
                 || (expectedPatchId is not null && actualPatchId is not null
@@ -461,9 +512,14 @@ internal sealed class RailwayServiceReconciler
             {
                 throw new InvalidOperationException("The exact Railway deployment does not prove its association with the recorded configuration request. Reconcile concurrent changes before retrying.");
             }
-
+            if (options.Build is not null && cliMessage is not null && cliMessage != requestId)
+            {
+                throw new InvalidOperationException("The exact Railway source deployment has a different upload request message. Reconcile its recorded request before retrying.");
+            }
             if (project is not null && environment is not null && service is not null && marker is not null
-                && (expectedPatchId is null || actualPatchId is not null))
+                && (expectedPatchId is null || actualPatchId is not null)
+                && (options.Build is null || (cliMessage is not null && builder == "DOCKERFILE"
+                    && dockerfile == RailwaySourceUpload.GetTransportDockerfilePath(options.Build))))
             {
                 return;
             }
@@ -491,9 +547,17 @@ internal sealed class RailwayServiceReconciler
 
     private async Task<JsonObject> ReadEnvironmentCoreAsync(RailwayResolvedTarget target, CancellationToken cancellationToken)
     {
-        JsonObject data = await _client.SendAsync("query($id:String!){environment(id:$id){serviceInstances{edges{node{serviceId serviceName source{image} startCommand restartPolicyType restartPolicyMaxRetries cronSchedule healthcheckPath healthcheckTimeout region sleepApplication numReplicas latestDeployment{id status meta}}}} volumeInstances{edges{node{volumeId serviceId mountPath region}}}}}",
+        JsonObject data = await _client.SendAsync("query($id:String!){environment(id:$id){serviceInstances{edges{node{serviceId serviceName railwayConfigFile source{image repo} startCommand restartPolicyType restartPolicyMaxRetries cronSchedule healthcheckPath healthcheckTimeout region sleepApplication numReplicas latestDeployment{id status meta}}}} volumeInstances{edges{node{volumeId serviceId mountPath region}}}}}",
             new { id = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
         return data["environment"]!.AsObject();
+    }
+
+    private static void ValidateSourceConfigFile(JsonObject? instance, RailwayServiceOptions options)
+    {
+        if (options.Build is not null && !string.IsNullOrEmpty((string?)instance?["railwayConfigFile"]))
+        {
+            throw new InvalidOperationException("Railway source builds cannot adopt a service with a custom config-as-code path. Clear its Railway Config File setting before publishing so declared deployment options remain authoritative.");
+        }
     }
 
     private static JsonObject DesiredSettings(string image, RailwayServiceOptions options)
@@ -510,7 +574,7 @@ internal sealed class RailwayServiceReconciler
 
         JsonObject settings = new()
         {
-            ["source"] = new JsonObject { ["image"] = image },
+            ["source"] = options.Build is null ? new JsonObject { ["image"] = image } : new JsonObject { ["image"] = null, ["repo"] = null },
             ["startCommand"] = options.StartCommand,
             ["restartPolicyType"] = restart,
             ["cronSchedule"] = options.CronSchedule,
@@ -549,13 +613,15 @@ internal sealed class RailwayServiceReconciler
     private static bool SettingsMatch(JsonObject actual, JsonObject desired)
     {
         string? desiredImage = (string?)desired["source"]?["image"];
-        if (actual["latestDeployment"]?["meta"]?["image"] is JsonNode deployedImage && (string?)deployedImage != desiredImage)
+        if (desiredImage is not null && actual["latestDeployment"]?["meta"]?["image"] is JsonNode deployedImage && (string?)deployedImage != desiredImage)
         {
             return false;
         }
 
         JsonNode? deployed = actual["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"];
-        return desired.All(pair => JsonNode.DeepEquals(pair.Key == "source" ? actual[pair.Key] : deployed?[pair.Key] ?? actual[pair.Key], pair.Value));
+        return desired.All(pair => pair.Key == "source"
+            ? (string?)actual["source"]?["image"] == desiredImage && actual["source"]?["repo"] is null
+            : JsonNode.DeepEquals(deployed?[pair.Key] ?? actual[pair.Key], pair.Value));
     }
 
     private static void ValidateVolumeDrift(JsonObject environment, string serviceId, RailwayServiceOptions options, JsonObject identity)
@@ -684,7 +750,7 @@ internal sealed class RailwayServiceReconciler
         return true;
     }
 
-    private async Task WaitForDeploymentAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, string image, RailwayServiceOptions options, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task<string?> WaitForDeploymentAsync(RailwayResolvedTarget target, string serviceId, string deploymentId, string image, RailwayServiceOptions options, TimeSpan timeout, CancellationToken cancellationToken)
     {
         Stopwatch timer = Stopwatch.StartNew();
         while (timer.Elapsed < timeout)
@@ -699,8 +765,16 @@ internal sealed class RailwayServiceReconciler
 
             string status = (string)deployment["status"]!;
             string? deployedImage = (string?)deployment["meta"]?["image"];
-            if ((deployedImage is not null && deployedImage != image)
-                || ((status is "SUCCESS" or "SLEEPING") && deployedImage is null))
+            if (options.Build is not null)
+            {
+                deployedImage = (string?)deployment["meta"]?["imageDigest"];
+                if (deployedImage is not null)
+                {
+                    RailwayServiceValidation.ValidateBuiltDigest(deployedImage);
+                }
+            }
+            if (options.Build is null && ((deployedImage is not null && deployedImage != image)
+                || ((status is "SUCCESS" or "SLEEPING") && deployedImage is null)))
             {
                 throw new InvalidOperationException("The exact Railway deployment does not prove the requested retained image. Reconcile its recorded execution before requesting another process.");
             }
@@ -715,12 +789,12 @@ internal sealed class RailwayServiceReconciler
 
             if (finite && status == "SUCCESS" && (bool)deployment["deploymentStopped"]! && instances.Length != 0 && instances.All(instance => instance == "EXITED"))
             {
-                return;
+                return deployedImage;
             }
 
             if (!finite && (status == "SUCCESS" || (options.SleepApplication && status == "SLEEPING")))
             {
-                return;
+                return deployedImage;
             }
 
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
@@ -765,13 +839,16 @@ internal sealed class RailwayDeploymentFailedException : InvalidOperationExcepti
 
 internal sealed class RailwayServiceResult
 {
-    internal RailwayServiceResult(string serviceId, string privateHostname, string? publicUrl, string? deploymentId, bool deployed)
+    internal RailwayServiceResult(string serviceId, string privateHostname, string? publicUrl, string? deploymentId, bool deployed, string? image = null, string? buildFingerprint = null, string? imageDigest = null)
     {
         ServiceId = serviceId;
         PrivateHostname = privateHostname;
         PublicUrl = publicUrl;
         DeploymentId = deploymentId;
         Deployed = deployed;
+        Image = image;
+        BuildFingerprint = buildFingerprint;
+        ImageDigest = imageDigest;
     }
 
     internal string ServiceId { get; }
@@ -779,4 +856,7 @@ internal sealed class RailwayServiceResult
     internal string? PublicUrl { get; }
     internal string? DeploymentId { get; }
     internal bool Deployed { get; }
+    internal string? Image { get; }
+    internal string? BuildFingerprint { get; }
+    internal string? ImageDigest { get; }
 }

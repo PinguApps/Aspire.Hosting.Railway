@@ -8,6 +8,17 @@ internal static partial class RailwayServiceValidation
     [GeneratedRegex(@"\A[^\s@]+@sha256:[a-f0-9]{64}\z", RegexOptions.CultureInvariant)]
     private static partial Regex DigestPattern();
 
+    [GeneratedRegex(@"\Asha256:[a-f0-9]{64}\z", RegexOptions.CultureInvariant)]
+    private static partial Regex BuiltDigestPattern();
+
+    internal static void ValidateBuiltDigest(string? digest)
+    {
+        if (digest is null || !BuiltDigestPattern().IsMatch(digest))
+        {
+            throw new InvalidOperationException("The exact Railway source deployment does not expose a valid built image digest.");
+        }
+    }
+
     internal static void ValidateImage(string image)
     {
         if (!DigestPattern().IsMatch(image))
@@ -18,6 +29,29 @@ internal static partial class RailwayServiceValidation
 
     internal static void Validate(RailwayServiceOptions options)
     {
+        if (options.Build is RailwayBuildOptions build)
+        {
+            if (options.Image is not null || options.RegistryUsername is not null || options.RegistryPassword is not null)
+            {
+                throw new ArgumentException("Railway source builds cannot also select a retained image or registry credentials.", nameof(options));
+            }
+
+            if (string.IsNullOrWhiteSpace(build.ContextPath) || string.IsNullOrWhiteSpace(build.DockerfilePath)
+                || Path.IsPathRooted(build.DockerfilePath) || build.DockerfilePath.Replace('\\', '/').Split('/').Contains("..", StringComparer.Ordinal))
+            {
+                throw new ArgumentException("Source builds require an explicit context and a Dockerfile below that context.", nameof(options));
+            }
+
+            RailwayBuildArgument[] arguments = build.BuildArguments ?? [];
+            if (arguments.Any(argument => string.IsNullOrWhiteSpace(argument.Name) || argument.Name.StartsWith("PINGUAPPS_", StringComparison.Ordinal)
+                    || argument.Name.StartsWith("RAILWAY_", StringComparison.Ordinal) || argument.Name is "PORT" or "ASPNETCORE_HTTP_PORTS"
+                    || argument.Name.Contains('=', StringComparison.Ordinal) || argument.Value is null)
+                || arguments.Select(argument => argument.Name).Distinct(StringComparer.Ordinal).Count() != arguments.Length)
+            {
+                throw new ArgumentException("Build arguments must have unique non-reserved names and non-secret values.", nameof(options));
+            }
+        }
+
         if ((options.RegistryUsername is null) != (options.RegistryPassword is null) || options.RegistryPassword is { Secret: false })
         {
             throw new ArgumentException("Registry credentials require both parameters and a secret password.", nameof(options));

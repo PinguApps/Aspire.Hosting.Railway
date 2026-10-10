@@ -825,7 +825,7 @@ public sealed class ReconciliationContractTests
         return reconciler.ApplyAsync(Target(), "web", "web", image, options, variables ?? new(StringComparer.Ordinal), identity, saveIdentity ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
     }
 
-    private sealed class Provider : HttpMessageHandler
+    internal sealed class Provider : HttpMessageHandler
     {
         internal string TokenProject { get; set; } = "project";
         internal string TokenEnvironment { get; set; } = "environment";
@@ -844,6 +844,9 @@ public sealed class ReconciliationContractTests
         internal string? ForcedDeploymentImage { get; set; }
         internal string? ReportedImage { get; set; }
         internal bool OmitReportedImage { get; set; }
+        internal bool SourceUploaded { get; private set; }
+        internal bool OmitBuiltImageDigest { get; set; }
+        internal bool WrongCliMessage { get; set; }
         internal bool WrongRequestMarker { get; set; }
         internal bool ReturnCompositePatchReference { get; set; }
         internal string? MissingCorrelationField { get; set; }
@@ -881,9 +884,18 @@ public sealed class ReconciliationContractTests
 
         internal void SetConfiguredImage(string image) => _service!["source"] = new JsonObject { ["image"] = image };
 
+        internal void SetConfigFile(string path) => _service!["railwayConfigFile"] = path;
+
         internal void CreateOperatorDeployment()
         {
             using HttpResponseMessage response = Deploy("environmentPatchCommit", fromSource: true);
+        }
+
+        internal string UploadSource()
+        {
+            SourceUploaded = true;
+            using HttpResponseMessage response = Deploy("environmentPatchCommit", fromSource: true);
+            return (string)_deploymentIds.Last()!["node"]!["id"]!;
         }
 
         internal void CreateService(bool marked)
@@ -1037,6 +1049,14 @@ public sealed class ReconciliationContractTests
                 data["deployment"] = query.Contains("deployment(id:", StringComparison.Ordinal)
                     ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["meta"] = new JsonObject { ["image"] = reportedImage, ["patchId"] = $"patch-{args["id"]}" }, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
                     : throw new InvalidOperationException($"Unexpected test operation: {query}");
+                if (SourceUploaded)
+                {
+                    JsonObject meta = data["deployment"]!["meta"]!.AsObject();
+                    meta["image"] = null;
+                    meta["imageDigest"] = OmitBuiltImageDigest ? null : "sha256:" + new string('b', 64);
+                    meta["cliMessage"] = WrongCliMessage ? "another-upload" : _deploymentMarkers[(string)args["id"]!];
+                    meta["serviceManifest"] = new JsonObject { ["build"] = LastPatch!["build"]!.DeepClone() };
+                }
                 if (query.Contains("deploymentSnapshot", StringComparison.Ordinal))
                 {
                     CorrelationReadIds.Add((string)args["id"]!);
@@ -1076,6 +1096,21 @@ public sealed class ReconciliationContractTests
                                 break;
                             case "marker":
                                 data["deploymentSnapshot"]!["variables"]!["PINGUAPPS_DEPLOYMENT_REQUEST"] = null;
+                                break;
+                            case "cliMessage":
+                                data["deployment"]!["meta"]!["cliMessage"] = null;
+                                break;
+                            case "builder":
+                                data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["builder"] = null;
+                                break;
+                            case "dockerfile":
+                                data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["dockerfilePath"] = null;
+                                break;
+                            case "defaultBuilder":
+                                data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["builder"] = "RAILPACK";
+                                break;
+                            case "defaultDockerfile":
+                                data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["dockerfilePath"] = "Dockerfile";
                                 break;
                         }
                     }

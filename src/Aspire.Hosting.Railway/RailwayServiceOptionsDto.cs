@@ -9,6 +9,8 @@ public sealed class RailwayServiceOptionsDto
     public string? ServiceName { get; set; }
     /// <summary>Gets or sets the immutable retained container image.</summary>
     public string? Image { get; set; }
+    /// <summary>Gets or sets an opt-in Railway-owned Dockerfile build.</summary>
+    public RailwayBuildOptions? Build { get; set; }
     /// <summary>Gets or sets the process start command.</summary>
     public string? StartCommand { get; set; }
     /// <summary>Gets or sets the ownership policy.</summary>
@@ -50,6 +52,7 @@ public sealed class RailwayServiceOptionsDto
     {
         target.ServiceName = ServiceName;
         target.Image = Image;
+        target.Build = Build;
         target.StartCommand = StartCommand;
         target.OwnershipMode = OwnershipMode ?? RailwayOwnershipMode.CreateOrAdopt;
         target.ExistingServiceId = ExistingServiceId;

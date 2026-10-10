@@ -11,6 +11,9 @@ public sealed class RailwayServiceOutputs
     private string? _privateHostname;
     private string? _publicUrl;
     private string? _deploymentId;
+    private string? _image;
+    private string? _buildFingerprint;
+    private string? _imageDigest;
 
     internal RailwayServiceOutputs(IResource resource)
     {
@@ -25,13 +28,22 @@ public sealed class RailwayServiceOutputs
     public RailwayOutputReference PublicUrl => new(_resource, "publicUrl", () => _publicUrl);
     /// <summary>Gets the exact deployment observed by the publisher.</summary>
     public RailwayOutputReference DeploymentId => new(_resource, "deploymentId", () => _deploymentId);
+    /// <summary>Gets the image reported for the exact completed deployment, when Railway exposes it.</summary>
+    public RailwayOutputReference Image => new(_resource, "image", () => _image);
+    /// <summary>Gets the local source snapshot fingerprint associated with the completed Railway-owned build.</summary>
+    public RailwayOutputReference BuildFingerprint => new(_resource, "buildFingerprint", () => _buildFingerprint);
+    /// <summary>Gets the SHA256 digest of the completed image when reported; source builds can omit it.</summary>
+    public RailwayOutputReference ImageDigest => new(_resource, "imageDigest", () => _imageDigest);
 
-    internal void Populate(string serviceId, string hostname, string? publicUrl, string? deploymentId)
+    internal void Populate(string serviceId, string hostname, string? publicUrl, string? deploymentId, string? image = null, string? buildFingerprint = null, string? imageDigest = null)
     {
         _serviceId = serviceId;
         _privateHostname = hostname;
         _publicUrl = publicUrl;
         _deploymentId = deploymentId;
+        _image = image;
+        _buildFingerprint = buildFingerprint;
+        _imageDigest = imageDigest;
     }
 }
 

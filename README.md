@@ -2,7 +2,7 @@
 
 [![PinguApps.Aspire.Hosting.Railway version](https://img.shields.io/nuget/v/PinguApps.Aspire.Hosting.Railway?style=for-the-badge&label=PinguApps.Aspire.Hosting.Railway)](https://www.nuget.org/packages/PinguApps.Aspire.Hosting.Railway/) [![PinguApps.Aspire.Hosting.Railway downloads](https://img.shields.io/nuget/dt/PinguApps.Aspire.Hosting.Railway?style=for-the-badge&label=downloads)](https://www.nuget.org/packages/PinguApps.Aspire.Hosting.Railway/)
 
-Deploy normal Aspire projects and containers into a pre-created, site-owned Railway environment. Local development stays unchanged. Retained images deploy without building or pushing containers.
+Deploy normal Aspire projects and containers into a pre-created, site-owned Railway environment. Local development stays unchanged. Retained images deploy without building or pushing containers. Opt-in source uploads let Railway build and retain containers without an external private-registry pull credential.
 
 ## Install
 
@@ -116,6 +116,8 @@ web.WithRailwayRegistryCredentials(
 ```
 
 Pull credentials go only to Railway's control plane. Variables listed in `SealedVariables` become write-only runtime secrets. State stores keyed desired-value fingerprints, never their values or registry passwords. Infrastructure credentials in workload configuration cause refusal.
+
+For deployments without private-registry pull credentials, select `options.Build = new RailwayBuildOptions { ContextPath = "../..", DockerfilePath = "src/Web/Dockerfile" }`. Railway builds and retains that service's container; `aspire deploy` performs the upload internally. The deployment machine needs Railway CLI 5.63.1 or later. See [source builds](docs/source-builds.md) for C#/TypeScript examples, upload exclusions, job ordering, and retention limits. Existing image-based publishing remains the default.
 
 ## Development and release
 

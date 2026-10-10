@@ -13,6 +13,7 @@
 | `AuthenticationMode` | `RailwayAuthenticationMode` | `ProjectToken`; explicit `Bearer` is account/workspace authentication. |
 | `ExpectedProjectName` | Nullable string | Required in `Bearer` mode. |
 | `ExpectedWorkspaceId` | Nullable string | Required in `Bearer` mode. |
+| `CliPath` | String | `railway`; source uploads require Railway CLI 5.63.1 or later. |
 
 C# callbacks use `RailwayServiceOptions`; TypeScript uses callback-free `RailwayServiceOptionsDto`, with camel-case properties. Exactly one replica is published.
 
@@ -20,6 +21,7 @@ C# callbacks use `RailwayServiceOptions`; TypeScript uses callback-free `Railway
 | --- | --- | --- |
 | `ServiceName` | Aspire resource name | Recorded remote identity; renaming an allocation requires operator reconciliation. |
 | `Image` | Pre-attached image annotation | Required immutable `registry/image@sha256:<64 lowercase hex>` reference. Tags are rejected. |
+| `Build` | Unset | Opt-in `RailwayBuildOptions` with explicit `ContextPath`, relative `DockerfilePath` (default `Dockerfile`), and optional non-secret `BuildArguments` (`Name` / `Value`). Mutually exclusive with explicit image and registry credentials. |
 | `OwnershipMode` | `CreateOrAdopt` | See the [ownership rules](../README.md#ownership-and-repeatability). |
 | `ExistingServiceId` | Unset | Required to explicitly adopt an unmarked existing service. |
 | `StartCommand` | Image default | Optional container command override. |
@@ -49,3 +51,5 @@ Use `WithRailwayRegistryCredentials(usernameParameter, passwordParameter)` for p
 Use `WithRailwayDeploymentDependency(prerequisite)` to require another Railway deployment's success. C# can also populate `DeploymentDependsOn`. Normal Aspire `WithEnvironment` / `WithReference` bindings resolve published endpoints to private Railway hostnames and container ports.
 
 Pre-attached `WithImageSHA256` annotations are supported. The deployment pipeline removes build/push annotations even when `PublishAsDockerFile` follows `PublishToRailway`; local development retains its original resource configuration.
+
+See [Railway-owned source builds](source-builds.md) for upload boundaries, CLI prerequisites, release identity, and retention limits.
