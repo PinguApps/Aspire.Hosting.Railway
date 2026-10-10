@@ -20,6 +20,11 @@ Feature: Railway owned Dockerfile builds
     Then two source uploads have run
     And the completed deployment exposes its Railway image digest
 
+  Scenario: The read only source plan reports conditional build reconciliation
+    Given a Railway owned source service
+    When changed source inputs are planned after successful publication
+    Then the source plan reports conditional rebuilding without provider mutation
+
   Scenario: Another upload's metadata cannot satisfy a source request
     Given a Railway owned finite source service
     And the upload metadata belongs to another request

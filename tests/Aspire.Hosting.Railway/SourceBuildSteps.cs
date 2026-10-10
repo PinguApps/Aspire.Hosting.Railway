@@ -25,6 +25,8 @@ public sealed class SourceBuildSteps : IDisposable
     private string? _fingerprint;
     private Exception? _error;
     private int _uploads;
+    private string? _plan;
+    private int _mutationsBeforePlan;
     private string _sourceFingerprint = "source:sha256:explicit-snapshot";
 
     [Given("a Railway owned source service")]
@@ -152,6 +154,27 @@ public sealed class SourceBuildSteps : IDisposable
         _sourceFingerprint = "source:sha256:changed-snapshot";
         _result = await ApplyAsync();
         Assert.True(_result.Deployed);
+    }
+
+    [When("changed source inputs are planned after successful publication")]
+    public async Task PlanChangedSource()
+    {
+        await ApplyAsync();
+        _sourceFingerprint = "source:sha256:changed-snapshot";
+        _options.Build!.BuildArguments = [new RailwayBuildArgument { Name = "RELEASE_LABEL", Value = "changed" }];
+        _mutationsBeforePlan = _provider.Mutations;
+        using HttpClient http = new(_provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(http, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        _plan = await reconciler.PreflightAsync(new RailwayResolvedTarget("project", "environment", "site", new()),
+            "web", "web", _sourceFingerprint, _options, _identity, TestContext.Current.CancellationToken);
+    }
+
+    [Then("the source plan reports conditional rebuilding without provider mutation")]
+    public void ConditionalSourcePlan()
+    {
+        Assert.Equal("Reuse service settings; reconcile readiness and rebuild if source content, build inputs, or deployment state changed.", _plan);
+        Assert.Equal(_mutationsBeforePlan, _provider.Mutations);
+        Assert.Equal(1, _uploads);
     }
 
     [When("the source service is rejected")]

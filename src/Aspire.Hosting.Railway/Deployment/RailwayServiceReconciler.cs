@@ -44,7 +44,8 @@ internal sealed class RailwayServiceReconciler
         ValidateDomainDrift(domains, options);
         if (SettingsMatch(instance, DesiredSettings(image, options)))
         {
-            return "Reuse service settings; reconcile runtime bindings and readiness.";
+            return options.Build is null ? "Reuse service settings; reconcile runtime bindings and readiness."
+                : "Reuse service settings; reconcile readiness and rebuild if source content, build inputs, or deployment state changed.";
         }
         return options.Build is null ? "Update the existing site's service configuration and retained image."
             : "Update the existing site's service configuration and upload its Dockerfile build context.";
