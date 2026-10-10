@@ -68,6 +68,13 @@ Feature: Railway owned Dockerfile builds
     When the source service is rejected
     Then no source upload or provider mutation has run
 
+  Scenario: Source publication refuses an existing custom config as code path
+    Given a Railway owned source service
+    And the existing service has a custom config as code path
+    When the source service is rejected
+    Then no source upload or provider mutation has run
+    And the operator is told to clear the custom config file setting
+
   Scenario: Source snapshots omit local credentials and keep a stable content identity
     Given a source context containing local secrets
     When the source context is snapshotted twice
@@ -83,6 +90,18 @@ Feature: Railway owned Dockerfile builds
     Given a source context ignoring its nested Dockerfile and Docker ignore file
     When the nested source context is snapshotted
     Then Docker build control files are explicitly retained in the CLI upload rules
+
+  Scenario Outline: Railway config as code cannot override declared source deployment options
+    Given a source context containing Railway config <path>
+    When the source snapshot is rejected
+    Then conflicting config as code is reported without its contents
+    And no source upload or provider mutation has run
+    Examples:
+      | path                |
+      | railway.json        |
+      | railway.toml        |
+      | nested/railway.json |
+
 
   Scenario: Source identity includes executable file modes on Unix
     Given a source context containing local secrets

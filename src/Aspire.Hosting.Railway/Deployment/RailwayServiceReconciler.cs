@@ -34,6 +34,7 @@ internal sealed class RailwayServiceReconciler
             return options.Build is null ? "Create a site-owned immutable container service." : "Create a site-owned service and upload its Dockerfile build context.";
         }
 
+        ValidateSourceConfigFile(instance, options);
         string serviceId = (string)instance["serviceId"]!;
         JsonObject variables = await _client.ReadVariablesAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateOwnership(variables, target.SiteKey, resourceName, serviceId, options, identity);
@@ -41,9 +42,12 @@ internal sealed class RailwayServiceReconciler
         ValidateVolumeDrift(environment, serviceId, options, identity);
         JsonObject domains = await ReadDomainsAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateDomainDrift(domains, options);
-        return SettingsMatch(instance, DesiredSettings(image, options))
-            ? "Reuse service settings; reconcile runtime bindings and readiness."
-            : "Update the existing site's service configuration and retained image.";
+        if (SettingsMatch(instance, DesiredSettings(image, options)))
+        {
+            return "Reuse service settings; reconcile runtime bindings and readiness.";
+        }
+        return options.Build is null ? "Update the existing site's service configuration and retained image."
+            : "Update the existing site's service configuration and upload its Dockerfile build context.";
     }
 
     internal async Task<RailwayServiceResult> ApplyAsync(
@@ -75,6 +79,7 @@ internal sealed class RailwayServiceReconciler
         ValidateCachedScope(identity, target, serviceName);
         JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
         JsonObject? instance = FindService(environment, serviceName, (string?)identity["serviceId"] ?? options.ExistingServiceId);
+        ValidateSourceConfigFile(instance, options);
         bool created = false;
         if (variables.ContainsKey("PINGUAPPS_DEPLOYMENT_REQUEST"))
         { throw new ArgumentException("PINGUAPPS_DEPLOYMENT_REQUEST is reserved for Railway deployment identity.", nameof(variables)); }
@@ -154,6 +159,7 @@ internal sealed class RailwayServiceReconciler
         environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
         instance = FindService(environment, serviceName, serviceId)
             ?? throw new InvalidOperationException("Created Railway service is not visible in the expected environment.");
+        ValidateSourceConfigFile(instance, options);
         JsonObject currentVariables = await _client.ReadVariablesAsync(target, serviceId, cancellationToken).ConfigureAwait(false);
         ValidateUnspecifiedRegion(instance, options);
         ValidateVolumeDrift(environment, serviceId, options, identity);
@@ -540,9 +546,17 @@ internal sealed class RailwayServiceReconciler
 
     private async Task<JsonObject> ReadEnvironmentCoreAsync(RailwayResolvedTarget target, CancellationToken cancellationToken)
     {
-        JsonObject data = await _client.SendAsync("query($id:String!){environment(id:$id){serviceInstances{edges{node{serviceId serviceName source{image repo} startCommand restartPolicyType restartPolicyMaxRetries cronSchedule healthcheckPath healthcheckTimeout region sleepApplication numReplicas latestDeployment{id status meta}}}} volumeInstances{edges{node{volumeId serviceId mountPath region}}}}}",
+        JsonObject data = await _client.SendAsync("query($id:String!){environment(id:$id){serviceInstances{edges{node{serviceId serviceName railwayConfigFile source{image repo} startCommand restartPolicyType restartPolicyMaxRetries cronSchedule healthcheckPath healthcheckTimeout region sleepApplication numReplicas latestDeployment{id status meta}}}} volumeInstances{edges{node{volumeId serviceId mountPath region}}}}}",
             new { id = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
         return data["environment"]!.AsObject();
+    }
+
+    private static void ValidateSourceConfigFile(JsonObject? instance, RailwayServiceOptions options)
+    {
+        if (options.Build is not null && !string.IsNullOrEmpty((string?)instance?["railwayConfigFile"]))
+        {
+            throw new InvalidOperationException("Railway source builds cannot adopt a service with a custom config-as-code path. Clear its Railway Config File setting before publishing so declared deployment options remain authoritative.");
+        }
     }
 
     private static JsonObject DesiredSettings(string image, RailwayServiceOptions options)

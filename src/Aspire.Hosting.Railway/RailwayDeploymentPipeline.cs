@@ -164,7 +164,7 @@ internal static class RailwayDeploymentPipeline
             target, resource.Name, annotation.Options.ServiceName ?? resource.Name, image, annotation.Options, environment, section.Data,
             () => manager.SaveSectionAsync(section, cancellationToken), cancellationToken,
             registryCredentials, registryFingerprint, sealedFingerprints,
-            upload is null ? null : (serviceId, requestId, uploadCancellation) => upload.UploadAsync(target, serviceId, requestId, token, uploadCancellation)).WaitAsync(cancellationToken).ConfigureAwait(false);
+            upload is null ? null : (serviceId, requestId, uploadCancellation) => upload.UploadAsync(target, serviceId, requestId, token, uploadCancellation)).ConfigureAwait(false);
         annotation.Outputs.Populate(result.ServiceId, result.PrivateHostname, result.PublicUrl, result.DeploymentId, result.Image, result.BuildFingerprint, result.ImageDigest);
         context.Summary.Add($"Railway service: {resource.Name}", result.ServiceId);
         if (result.PublicUrl is not null)

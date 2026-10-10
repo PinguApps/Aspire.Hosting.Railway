@@ -884,6 +884,8 @@ public sealed class ReconciliationContractTests
 
         internal void SetConfiguredImage(string image) => _service!["source"] = new JsonObject { ["image"] = image };
 
+        internal void SetConfigFile(string path) => _service!["railwayConfigFile"] = path;
+
         internal void CreateOperatorDeployment()
         {
             using HttpResponseMessage response = Deploy("environmentPatchCommit", fromSource: true);

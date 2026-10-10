@@ -107,6 +107,10 @@ internal sealed class RailwaySourceUpload : IDisposable
         foreach (string item in Directory.EnumerateFileSystemEntries(directory))
         {
             string name = Path.GetFileName(item);
+            if (name.Equals("railway.json", StringComparison.OrdinalIgnoreCase) || name.Equals("railway.toml", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Railway source builds reject railway.json and railway.toml because config-as-code overrides the declared deployment options. Remove them from the explicit build context.");
+            }
             if (new[] { ".git", ".aspire", ".railway", "node_modules", "bin", "obj", "secrets.json" }.Contains(name, StringComparer.OrdinalIgnoreCase)
                 || name.Equals(".env", StringComparison.OrdinalIgnoreCase) || name.StartsWith(".env.", StringComparison.OrdinalIgnoreCase))
             {
@@ -199,6 +203,7 @@ internal sealed class RailwaySourceUpload : IDisposable
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             }
         }
     }

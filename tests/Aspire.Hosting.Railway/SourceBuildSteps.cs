@@ -46,6 +46,16 @@ public sealed class SourceBuildSteps : IDisposable
     [Given("an unowned Railway service already exists")]
     public void UnownedService() => _provider.CreateService(marked: false);
 
+    [Given("the existing service has a custom config as code path")]
+    public void ExistingConfigFile()
+    {
+        _provider.CreateService(marked: true);
+        _provider.SetConfigFile("/custom-config.json");
+    }
+
+    [Then("the operator is told to clear the custom config file setting")]
+    public void ClearConfigFile() => Assert.Contains("Clear its Railway Config File setting", _error!.Message, StringComparison.Ordinal);
+
     [Given("the upload metadata belongs to another request")]
     public void WrongUploadMarker() => _provider.WrongCliMessage = true;
 
@@ -145,7 +155,7 @@ public sealed class SourceBuildSteps : IDisposable
     }
 
     [When("the source service is rejected")]
-    public async Task RejectService() => await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync());
+    public async Task RejectService() => _error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAsync());
 
     [When("upload correlation is rejected and publication is resumed")]
     public async Task RejectCorrelationAndResume()
@@ -252,6 +262,22 @@ public sealed class SourceBuildSteps : IDisposable
 
     [Then("the upload error does not disclose the credential")]
     public void RedactedError() => Assert.DoesNotContain("secret-token", _error!.ToString(), StringComparison.Ordinal);
+
+    [Given("a source context containing Railway config (.*)")]
+    public void ConflictingConfig(string path)
+    {
+        ContextWithSecrets();
+        string config = Path.Combine(_context, path);
+        Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+        File.WriteAllText(config, "private-config-content");
+    }
+
+    [Then("conflicting config as code is reported without its contents")]
+    public void ConfigDiagnostic()
+    {
+        Assert.Contains("config-as-code overrides the declared deployment options", _error!.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-config-content", _error.ToString(), StringComparison.Ordinal);
+    }
 
     [Given("a source context ignoring its nested Dockerfile and Docker ignore file")]
     public void IgnoredControlFiles()

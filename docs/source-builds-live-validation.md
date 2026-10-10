@@ -4,7 +4,7 @@ The source-build implementation was exercised against a disposable Railway proje
 
 ## Repeat the core rehearsal
 
-Allocate a disposable Railway project/environment and a scoped project token. Set these process environment variables without committing their values:
+Allocate a disposable Railway project/environment and a scoped project token. Add the shared environment variable `PINGUAPPS_SITE_KEY` in Railway with the same value you will supply as `LIVE_SITE_KEY`; the publisher refuses environments without this allocation marker. Set these process environment variables without committing their values:
 
 - `LIVE_RAILWAY_PROJECT_ID`, `LIVE_RAILWAY_ENVIRONMENT_ID`, `LIVE_RAILWAY_TOKEN`, `LIVE_SITE_KEY`.
 - `LIVE_DASHBOARD_BROWSER_TOKEN` and `LIVE_DASHBOARD_OTLP_TOKEN`: separate dashboard authentication secrets of at least 32 characters. Keep the same values across repeat runs.
@@ -26,7 +26,9 @@ The fixture deliberately excludes its Dockerfile and `.dockerignore` in Docker i
 
 ## Observed results
 
-Initial deployment, unchanged replay, changed build argument, and ignored/nested Dockerfile runs all completed successfully. The final checked-in harness run completed all 13 deployment steps in 36 seconds. Final HTTP evidence was:
+The disposable project was deleted after verification. Deployment IDs and responses below are historical evidence, not currently running endpoints.
+
+Initial deployment, unchanged replay, changed build argument, and ignored/nested Dockerfile runs all completed successfully. The nested Dockerfile upload run completed all 13 deployment steps in 36 seconds. A final replay with config-as-code guards and cooperative CLI cleanup passed 13/13 steps in 7.64 seconds, retaining all four exact deployment IDs. Final HTTP evidence was:
 
 | Resource | Exact deployment | HTTP result |
 | --- | --- | --- |
@@ -39,6 +41,21 @@ The source snapshots and provider-reported image digests were captured alongside
 
 A separate mixed core/Jobs consumer also exercised finite success before a dependent web deployment, a failing finite process, a bounded finite timeout, source cron, source-content changes without changing a build argument, and existing-image/source transitions in both directions. Workload-variable inspection verified that neither Railway control-plane tokens nor GitHub tokens reached the source services.
 
+## Recovery after revoking the upload credential
+
+After both package rehearsals finished, the scoped upload token was revoked. Its original lookup was rejected with `Project Token not found`. Railway then restarted the mixed consumer's source project/container successfully. An independently authenticated Railway account redeployed their retained builds without the original token, another source upload, or a GitHub PAT:
+
+| Source service | Exact retained-build redeployment | Result |
+| --- | --- | --- |
+| Project | `da46a9f2-ee7d-49db-bd6c-03e064d38a71` | SUCCESS; HTTP 200, `RAILWAY_PROJECT_BUILD_v2_runtime-binding-passed_CODE_UPDATED` |
+| Container | `793a7266-bcef-4dc7-a161-7eb082aabda6` | SUCCESS; HTTP 200, `RAILWAY_CONTAINER_BUILD_v2` |
+
+Both reached SUCCESS at 22:07:45 UTC; HTTP responses were checked at 22:07:57 UTC. Provider image digests matched the preceding source builds, and workload credentials remained absent. This directly tested credential independence after revocation; it did not wait several days. Railway's own retention rules still apply.
+
+To repeat this recovery check before cleanup, record the completed source deployment IDs/digests, revoke the disposable scoped upload token in project settings, and confirm it no longer authenticates. Using your separate Railway account session, select each source deployment's **Restart**, verify readiness/HTTP response, then **Redeploy** using its previous image. Confirm the new deployment succeeds, keeps the image digest when supplied, and returns the same application marker without a source upload. A pull/build authentication error or a changed application marker is a failure. Do not revoke credentials used by unrelated projects.
+
+Finally delete only the disposable project in Railway. The rehearsal project was removed successfully, and cached secret parameters were removed from the task consumers while retaining non-secret deployment evidence.
+
 Real deployments exposed two provider behaviors that the implementation now handles: build metadata can initially contain default builder/path values before the requested Dockerfile configuration appears, and cached finite builds can omit the optional image digest. Request scope, snapshot marker, and CLI upload message remain mandatory; the publisher waits on the exact deployment and never fabricates an image identity.
 
-Repository checks also passed: 155 tests with zero failures or skips, and the packed TypeScript AppHost restore, typecheck, publish-step listing, and deploy dependency listing.
+Repository checks also passed: 159 tests with zero failures or skips, and the packed TypeScript AppHost restore, typecheck, publish-step listing, and deploy dependency listing. An external subprocess rehearsal cancelled a real long-lived CLI child and verified that cancellation returned only after child termination, preserving the snapshot cleanup order.
