@@ -3,6 +3,13 @@ using Aspire.Hosting.Railway.Deployment;
 using Aspire.Hosting.Railway.Management;
 using Reqnroll;
 using Xunit;
+using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+
+#pragma warning disable ASPIREPIPELINES001
+#pragma warning disable ASPIREPIPELINES003
 
 namespace Aspire.Hosting.Railway.Tests;
 
@@ -42,9 +49,72 @@ public sealed class SourceBuildSteps : IDisposable
     [Given("the upload metadata belongs to another request")]
     public void WrongUploadMarker() => _provider.WrongCliMessage = true;
 
+    [Given("Railway omits the built image digest")]
+    public void MissingBuiltDigest() => _provider.OmitBuiltImageDigest = true;
+
+    [When("the finite source service completes")]
+    public async Task CompleteFinite() => _result = await ApplyAsync();
+
+    [Then("its exact deployment and source snapshot remain proven")]
+    public void ProvenWithoutDigest()
+    {
+        Assert.Equal("deployment", _result!.DeploymentId);
+        Assert.Equal(_sourceFingerprint, _result.BuildFingerprint);
+        Assert.Null(_result.ImageDigest);
+    }
+
+    [When("runtime binding exceeds the publisher deadline")]
+    public async Task PublisherDeadline() => _error = await RunDeadlineAsync(callerCancellation: false);
+
+    [When("the caller cancels runtime binding")]
+    public async Task CallerCancellation() => _error = await RunDeadlineAsync(callerCancellation: true);
+
+    private static async Task<Exception?> RunDeadlineAsync(bool callerCancellation)
+    {
+        using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        IDistributedApplicationBuilder app = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = ["--publisher", "manifest"], DisableDashboard = true });
+        IResourceBuilder<RailwayTargetResource> target = app.AddRailwayTarget("railway",
+            app.AddParameter("project-id", "project"), app.AddParameter("environment-id", "environment"),
+            app.AddParameter("api-token", "secret-token", secret: true), app.AddParameter("site-key", "site"));
+        IResourceBuilder<ProjectResource> project = app.AddResource(new ProjectResource("deadline"))
+            .WithEnvironment(async context =>
+            {
+                if (callerCancellation)
+                {
+                    await cancellation.CancelAsync();
+                }
+                await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
+            })
+            .PublishToRailway(target, options =>
+            {
+                options.Image = "example/image@sha256:" + new string('a', 64);
+                options.DeploymentTimeout = callerCancellation ? TimeSpan.FromSeconds(10) : TimeSpan.FromMilliseconds(100);
+            });
+        using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        PipelineContext pipeline = new(new DistributedApplicationModel(app.Resources), app.ExecutionContext, services, NullLogger.Instance, cancellation.Token);
+        PipelineStepContext step = new() { PipelineContext = pipeline, ReportingStep = null! };
+        return await Record.ExceptionAsync(() => RailwayDeploymentPipeline.ExecuteAsync(project.Resource,
+            project.Resource.Annotations.OfType<RailwayServiceAnnotation>().Single(), step));
+    }
+
+    [Then("a sanitized completion deadline timeout is reported")]
+    public void ExplicitDeadline()
+    {
+        TimeoutException error = Assert.IsType<TimeoutException>(_error);
+        Assert.Contains("exceeded its completion deadline", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-token", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Then("caller cancellation is preserved")]
+    public void PreserveCallerCancellation() => Assert.IsAssignableFrom<OperationCanceledException>(_error);
+
     [Given("source proof (.*) is temporarily absent")]
     public void DelayedProof(string field)
     {
+        if (field == "defaultDockerfile")
+        {
+            _options.Build!.DockerfilePath = "jobs/Dockerfile";
+        }
         _provider.MissingCorrelationField = field;
         _provider.MissingCorrelationResponses = 1;
     }
@@ -182,6 +252,57 @@ public sealed class SourceBuildSteps : IDisposable
 
     [Then("the upload error does not disclose the credential")]
     public void RedactedError() => Assert.DoesNotContain("secret-token", _error!.ToString(), StringComparison.Ordinal);
+
+    [Given("a source context ignoring its nested Dockerfile and Docker ignore file")]
+    public void IgnoredControlFiles()
+    {
+        ContextWithSecrets();
+        Directory.CreateDirectory(Path.Combine(_context, "jobs"));
+        File.WriteAllText(Path.Combine(_context, "jobs", "Dockerfile"), "FROM scratch\n");
+        File.WriteAllText(Path.Combine(_context, ".dockerignore"), "jobs/\n.dockerignore\n");
+        File.WriteAllText(Path.Combine(_context, ".railwayignore"), "jobs/Dockerfile\n");
+    }
+
+    [When("the nested source context is snapshotted")]
+    public async Task SnapshotNested() => _snapshot = await RailwaySourceUpload.CreateAsync(
+        new RailwayBuildOptions { ContextPath = _context, DockerfilePath = "./jobs/Dockerfile" }, "secret-token", TestContext.Current.CancellationToken);
+
+    [Then("Docker build control files are explicitly retained in the CLI upload rules")]
+    public void RetainedControlFiles()
+    {
+        string rules = File.ReadAllText(Path.Combine(_snapshot!.ContextPath, ".railwayignore"));
+        Assert.EndsWith("!/.dockerignore\n!/jobs/\n!/jobs/Dockerfile\n", rules, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(_snapshot.ContextPath, "jobs", "Dockerfile")));
+        Assert.True(File.Exists(Path.Combine(_snapshot.ContextPath, ".dockerignore")));
+    }
+
+    [When("source snapshots surround an executable mode change where supported")]
+    public async Task SnapshotModeChange()
+    {
+        RailwayBuildOptions build = new() { ContextPath = _context };
+        using RailwaySourceUpload first = await RailwaySourceUpload.CreateAsync(build, "secret-token", TestContext.Current.CancellationToken);
+        _fingerprint = first.Fingerprint;
+        if (!OperatingSystem.IsWindows())
+        {
+            string file = Path.Combine(_context, "marker");
+            File.SetUnixFileMode(file, File.GetUnixFileMode(file) ^ UnixFileMode.UserExecute);
+        }
+        _snapshot = await RailwaySourceUpload.CreateAsync(build, "secret-token", TestContext.Current.CancellationToken);
+    }
+
+    [Then("Unix executable mode changes are copied and alter source identity")]
+    public void ModeIdentity()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal(_fingerprint, _snapshot!.Fingerprint);
+        }
+        else
+        {
+            Assert.NotEqual(_fingerprint, _snapshot!.Fingerprint);
+            Assert.Equal(File.GetUnixFileMode(Path.Combine(_context, "marker")), File.GetUnixFileMode(Path.Combine(_snapshot.ContextPath, "marker")));
+        }
+    }
 
     [Given("an invalid source declaration with (.*)")]
     public void InvalidDeclaration(string conflict)

@@ -27,6 +27,21 @@ Feature: Railway owned Dockerfile builds
     Then only one source upload has run
     And the sent upload remains recorded for recovery
 
+  Scenario: A cached finite build can complete without provider image digest metadata
+    Given a Railway owned finite source service
+    And Railway omits the built image digest
+    When the finite source service completes
+    Then only one source upload has run
+    And its exact deployment and source snapshot remain proven
+
+  Scenario: The publisher deadline is reported as a deployment timeout
+    When runtime binding exceeds the publisher deadline
+    Then a sanitized completion deadline timeout is reported
+
+  Scenario: Caller cancellation remains cancellation
+    When the caller cancels runtime binding
+    Then caller cancellation is preserved
+
   Scenario Outline: Source proof metadata can arrive after the deployment ID
     Given a Railway owned source service
     And source proof <field> is temporarily absent
@@ -38,6 +53,8 @@ Feature: Railway owned Dockerfile builds
       | cliMessage |
       | builder    |
       | dockerfile |
+      | defaultBuilder |
+      | defaultDockerfile |
 
   Scenario: Source upload refuses another environment's scoped credential
     Given a Railway owned source service
@@ -61,6 +78,16 @@ Feature: Railway owned Dockerfile builds
     Given a source context containing the control plane credential
     When the source snapshot is rejected
     Then the upload error does not disclose the credential
+
+  Scenario: Dockerfile and Docker ignore rules are retained when excluded from build inputs
+    Given a source context ignoring its nested Dockerfile and Docker ignore file
+    When the nested source context is snapshotted
+    Then Docker build control files are explicitly retained in the CLI upload rules
+
+  Scenario: Source identity includes executable file modes on Unix
+    Given a source context containing local secrets
+    When source snapshots surround an executable mode change where supported
+    Then Unix executable mode changes are copied and alter source identity
 
   Scenario Outline: Ambiguous source declarations fail before deployment
     Given an invalid source declaration with <conflict>

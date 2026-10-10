@@ -845,6 +845,7 @@ public sealed class ReconciliationContractTests
         internal string? ReportedImage { get; set; }
         internal bool OmitReportedImage { get; set; }
         internal bool SourceUploaded { get; private set; }
+        internal bool OmitBuiltImageDigest { get; set; }
         internal bool WrongCliMessage { get; set; }
         internal bool WrongRequestMarker { get; set; }
         internal bool ReturnCompositePatchReference { get; set; }
@@ -1050,7 +1051,7 @@ public sealed class ReconciliationContractTests
                 {
                     JsonObject meta = data["deployment"]!["meta"]!.AsObject();
                     meta["image"] = null;
-                    meta["imageDigest"] = "sha256:" + new string('b', 64);
+                    meta["imageDigest"] = OmitBuiltImageDigest ? null : "sha256:" + new string('b', 64);
                     meta["cliMessage"] = WrongCliMessage ? "another-upload" : _deploymentMarkers[(string)args["id"]!];
                     meta["serviceManifest"] = new JsonObject { ["build"] = LastPatch!["build"]!.DeepClone() };
                 }
@@ -1102,6 +1103,12 @@ public sealed class ReconciliationContractTests
                                 break;
                             case "dockerfile":
                                 data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["dockerfilePath"] = null;
+                                break;
+                            case "defaultBuilder":
+                                data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["builder"] = "RAILPACK";
+                                break;
+                            case "defaultDockerfile":
+                                data["deployment"]!["meta"]!["serviceManifest"]!["build"]!["dockerfilePath"] = "Dockerfile";
                                 break;
                         }
                     }

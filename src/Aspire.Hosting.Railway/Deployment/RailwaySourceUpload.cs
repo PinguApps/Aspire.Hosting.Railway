@@ -79,6 +79,15 @@ internal sealed class RailwaySourceUpload : IDisposable
                     ignore += await File.ReadAllTextAsync(ignorePath, cancellationToken).ConfigureAwait(false) + "\n";
                 }
             }
+            ignore += "!/.dockerignore\n";
+            string dockerfilePath = Path.GetRelativePath(build.ContextPath,
+                Path.GetFullPath(Path.Combine(build.ContextPath, build.DockerfilePath))).Replace('\\', '/');
+            string[] segments = dockerfilePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            for (int index = 1; index < segments.Length; index++)
+            {
+                ignore += "!/" + string.Join('/', segments.Take(index)) + "/\n";
+            }
+            ignore += "!/" + dockerfilePath + "\n";
             await File.WriteAllTextAsync(Path.Combine(path, ".railwayignore"), ignore, cancellationToken).ConfigureAwait(false);
             if (!File.Exists(Path.Combine(path, build.DockerfilePath)))
             {

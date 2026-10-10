@@ -501,17 +501,18 @@ internal sealed class RailwayServiceReconciler
             if ((project is not null && project != target.ProjectId) || (environment is not null && environment != target.EnvironmentId)
                 || (service is not null && service != serviceId) || (marker is not null && marker != requestId)
                 || (expectedPatchId is not null && actualPatchId is not null
-                    && expectedPatchId != actualPatchId && expectedPatchId != $"commitChanges/{target.EnvironmentId}/{actualPatchId}")
-                || (options.Build is not null && ((cliMessage is not null && cliMessage != requestId)
-                    || (builder is not null && builder != "DOCKERFILE")
-                    || (dockerfile is not null && dockerfile != options.Build.DockerfilePath.Replace('\\', '/')))))
+                    && expectedPatchId != actualPatchId && expectedPatchId != $"commitChanges/{target.EnvironmentId}/{actualPatchId}"))
             {
                 throw new InvalidOperationException("The exact Railway deployment does not prove its association with the recorded configuration request. Reconcile concurrent changes before retrying.");
             }
-
+            if (options.Build is not null && cliMessage is not null && cliMessage != requestId)
+            {
+                throw new InvalidOperationException("The exact Railway source deployment has a different upload request message. Reconcile its recorded request before retrying.");
+            }
             if (project is not null && environment is not null && service is not null && marker is not null
                 && (expectedPatchId is null || actualPatchId is not null)
-                && (options.Build is null || (cliMessage is not null && builder is not null && dockerfile is not null)))
+                && (options.Build is null || (cliMessage is not null && builder == "DOCKERFILE"
+                    && dockerfile == options.Build.DockerfilePath.Replace('\\', '/'))))
             {
                 return;
             }
@@ -752,7 +753,7 @@ internal sealed class RailwayServiceReconciler
             if (options.Build is not null)
             {
                 deployedImage = (string?)deployment["meta"]?["imageDigest"];
-                if (status is "SUCCESS" or "SLEEPING")
+                if (deployedImage is not null)
                 {
                     RailwayServiceValidation.ValidateBuiltDigest(deployedImage);
                 }

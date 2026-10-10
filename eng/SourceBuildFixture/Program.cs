@@ -13,6 +13,7 @@ if (builder.ExecutionContext.IsPublishMode)
     RailwayBuildOptions Build(string name) => new()
     {
         ContextPath = Path.Combine(builder.AppHostDirectory, "Contexts", name),
+        DockerfilePath = name == "Container" ? "docker/Dockerfile" : "Dockerfile",
         BuildArguments = [new() { Name = "PROOF_VERSION", Value = Current("LIVE_PROOF_VERSION") }],
     };
     void Configure(RailwayServiceOptions options)

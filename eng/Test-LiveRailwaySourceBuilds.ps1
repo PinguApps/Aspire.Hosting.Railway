@@ -31,6 +31,11 @@ if ((Test-Path -LiteralPath $work) -and -not (Test-Path -LiteralPath $marker)) {
 }
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 Set-Content -LiteralPath $marker -Value "Railway source build fixture" -Encoding UTF8
+$contexts = [IO.Path]::GetFullPath((Join-Path $work "Contexts"))
+if (-not $contexts.StartsWith($work + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Fixture context cleanup escaped WorkDirectory."
+}
+Remove-Item -LiteralPath $contexts -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item -Path (Join-Path $PSScriptRoot "SourceBuildFixture/*") -Destination $work -Recurse -Force
 $project = Join-Path $work "SourceBuildFixture.csproj"
 $source = Get-Content -LiteralPath $project -Raw
@@ -45,12 +50,8 @@ $feed = [System.Security.SecurityElement]::Escape([IO.Path]::GetFullPath($packag
 "@ | Set-Content -LiteralPath (Join-Path $work "NuGet.Config") -Encoding UTF8
 $previousPackages = $env:NUGET_PACKAGES
 $previousProof = $env:LIVE_PROOF_VERSION
-$env:NUGET_PACKAGES = Join-Path $work ".nuget-packages"
+$env:NUGET_PACKAGES = Join-Path $work (".nuget-packages-" + [Guid]::NewGuid().ToString("N"))
 $env:LIVE_PROOF_VERSION = $ProofVersion
-$cache = [IO.Path]::GetFullPath((Join-Path $env:NUGET_PACKAGES "pinguapps.aspire.hosting.railway/$PackageVersion"))
-$cacheRoot = [IO.Path]::GetFullPath($env:NUGET_PACKAGES)
-if (-not $cache.StartsWith($cacheRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Package cache removal escaped the fixture." }
-Remove-Item -LiteralPath $cache -Recurse -Force -ErrorAction SilentlyContinue
 Push-Location $work
 try {
     dotnet restore $project --no-cache
