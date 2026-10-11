@@ -866,6 +866,18 @@ public sealed class ReconciliationContractTests
         internal List<string> AcceptedRequestMarkers { get; } = [];
         internal JsonNode? LastPatch { get; private set; }
         internal JsonObject Regions { get; private set; } = new() { ["sfo"] = new JsonObject { ["numReplicas"] = 1 } };
+        internal string? ConfiguredProviderRegion { get; private set; }
+        internal List<string> Operations { get; } = [];
+        internal string? CreatedVolumeDrift { get; set; }
+        internal string CreatedVolumeIncompleteField { get; set; } = "serviceId";
+        internal int CreatedVolumeIncompleteReads { get; set; }
+        internal int IncompleteVolumeReadCount { get; private set; }
+        internal TimeSpan CreatedVolumeReadDelay { get; set; }
+        internal bool IgnoreCreatedVolumeReadCancellation { get; set; }
+        internal Action? CreatedVolumeRead { get; set; }
+        internal TimeSpan RegionUpdateDelay { get; set; }
+        internal string? ForcedDeploymentRegion { get; set; }
+        internal bool MaterializeDefaultWithoutExplicitRegion { get; set; }
         internal string Status { get; set; } = "SUCCESS";
         internal string InstanceStatus { get; set; } = "RUNNING";
         internal bool Stopped { get; set; }
@@ -944,10 +956,27 @@ public sealed class ReconciliationContractTests
             }
             else if (query.Contains("serviceInstances", StringComparison.Ordinal))
             {
+                JsonArray volumes = Volumes.DeepClone().AsArray();
+                if (volumes.Count != 0 && Operations.Contains("volume-create"))
+                {
+                    CreatedVolumeRead?.Invoke();
+                    await Task.Delay(CreatedVolumeReadDelay, IgnoreCreatedVolumeReadCancellation ? CancellationToken.None : cancellationToken);
+                    if (CreatedVolumeIncompleteReads > 0)
+                    {
+                        CreatedVolumeIncompleteReads--;
+                        IncompleteVolumeReadCount++;
+                        volumes.Last()!["node"]![CreatedVolumeIncompleteField] = null;
+                        Operations.Add("incomplete-volume-read");
+                    }
+                    else
+                    {
+                        Operations.Add("volume-proof-read");
+                    }
+                }
                 data["environment"] = new JsonObject
                 {
                     ["serviceInstances"] = new JsonObject { ["edges"] = _service is null ? [] : new JsonArray(new JsonObject { ["node"] = _service.DeepClone() }) },
-                    ["volumeInstances"] = new JsonObject { ["edges"] = Volumes.DeepClone() },
+                    ["volumeInstances"] = new JsonObject { ["edges"] = volumes },
                 };
             }
             else if (query.Contains("deployments(input:", StringComparison.Ordinal))
@@ -987,6 +1016,7 @@ public sealed class ReconciliationContractTests
             }
             else if (query.Contains("environmentPatchCommit", StringComparison.Ordinal))
             {
+                Operations.Add("deployment-patch");
                 if (FailNextPatch)
                 {
                     FailNextPatch = false;
@@ -1034,8 +1064,28 @@ public sealed class ReconciliationContractTests
             }
             else if (query.Contains("serviceInstanceUpdate(", StringComparison.Ordinal))
             {
+                await Task.Delay(RegionUpdateDelay, cancellationToken);
+                Operations.Add("region-update");
                 Regions = args["input"]!["multiRegionConfig"]!.DeepClone().AsObject();
+                ConfiguredProviderRegion = (string?)args["input"]!["region"];
+                _service!["numReplicas"] = args["input"]!["numReplicas"]!.DeepClone();
                 data["serviceInstanceUpdate"] = true;
+            }
+            else if (query.Contains("volumeCreate(", StringComparison.Ordinal))
+            {
+                Operations.Add("volume-create");
+                string id = "volume-" + Volumes.Count;
+                Volumes.Add(new JsonObject
+                {
+                    ["node"] = new JsonObject
+                    {
+                        ["volumeId"] = id,
+                        ["serviceId"] = CreatedVolumeDrift == "service" ? "another-service" : args["input"]!["serviceId"]!.DeepClone(),
+                        ["mountPath"] = CreatedVolumeDrift == "mount" ? "/another-mount" : args["input"]!["mountPath"]!.DeepClone(),
+                        ["region"] = CreatedVolumeDrift == "region" ? "sfo" : args["input"]!["region"]?.DeepClone(),
+                    }
+                });
+                data["volumeCreate"] = new JsonObject { ["id"] = id };
             }
             else if (query.Contains("serviceInstanceDeploy", StringComparison.Ordinal))
             {
@@ -1049,13 +1099,19 @@ public sealed class ReconciliationContractTests
                 data["deployment"] = query.Contains("deployment(id:", StringComparison.Ordinal)
                     ? (JsonNode)new JsonObject { ["projectId"] = "project", ["environmentId"] = "environment", ["serviceId"] = "service", ["status"] = Status, ["meta"] = new JsonObject { ["image"] = reportedImage, ["patchId"] = $"patch-{args["id"]}" }, ["deploymentStopped"] = Stopped, ["instances"] = new JsonArray(new JsonObject { ["id"] = "instance", ["status"] = InstanceStatus }) }
                     : throw new InvalidOperationException($"Unexpected test operation: {query}");
+                data["deployment"]!["meta"]!["serviceManifest"] = new JsonObject { ["deploy"] = _deploySettings.DeepClone() };
+                if (ForcedDeploymentRegion is not null)
+                {
+                    data["deployment"]!["meta"]!["serviceManifest"]!["deploy"]!["multiRegionConfig"] = new JsonObject
+                    { [ForcedDeploymentRegion] = new JsonObject { ["numReplicas"] = 1 } };
+                }
                 if (SourceUploaded)
                 {
                     JsonObject meta = data["deployment"]!["meta"]!.AsObject();
                     meta["image"] = null;
                     meta["imageDigest"] = OmitBuiltImageDigest ? null : "sha256:" + new string('b', 64);
                     meta["cliMessage"] = WrongCliMessage ? "another-upload" : _deploymentMarkers[(string)args["id"]!];
-                    meta["serviceManifest"] = new JsonObject { ["build"] = LastPatch!["build"]!.DeepClone() };
+                    meta["serviceManifest"]!["build"] = LastPatch!["build"]!.DeepClone();
                 }
                 if (query.Contains("deploymentSnapshot", StringComparison.Ordinal))
                 {
@@ -1143,6 +1199,13 @@ public sealed class ReconciliationContractTests
 
         private HttpResponseMessage Deploy(string operation, bool fromSource)
         {
+            Operations.Add("deployment");
+            if (MaterializeDefaultWithoutExplicitRegion && ConfiguredProviderRegion is null)
+            {
+                _deploySettings["multiRegionConfig"] = new JsonObject { ["sfo"] = new JsonObject { ["numReplicas"] = 1 } };
+                foreach (JsonNode? volume in Volumes)
+                { volume!["node"]!["region"] = "sfo"; }
+            }
             DeployRequests++;
             if (InitialMissingResponses > 0)
             {

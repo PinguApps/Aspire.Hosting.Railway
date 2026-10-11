@@ -1,3 +1,4 @@
+#requires -Version 7.4
 param(
     [string] $Configuration = "Release",
     [string] $PackageVersion = "9999.0.0"
@@ -16,6 +17,9 @@ function Remove-SafeArtifact {
         throw "Artifact removal escaped its intended directory."
     }
     Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $target) {
+        throw "Artifact removal did not complete."
+    }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -24,19 +28,33 @@ $fixtureSource = Join-Path $repoRoot "tests/Aspire.Hosting.Railway/Fixtures/Type
 $artifactsRoot = Join-Path $repoRoot "artifacts/typescript-apphost-package"
 $packageOutput = Join-Path $artifactsRoot "packages"
 $fixtureWork = Join-Path $artifactsRoot "fixture"
-$nugetPackages = Join-Path $artifactsRoot ".nuget-packages"
+$nugetPackages = Join-Path $artifactsRoot (".nuget-packages-" + [Guid]::NewGuid().ToString("N"))
 $packageId = "PinguApps.Aspire.Hosting.Railway"
 
-Remove-SafeArtifact $artifactsRoot
+Remove-SafeArtifact $packageOutput
+Remove-SafeArtifact $fixtureWork
 New-Item $packageOutput -ItemType Directory -Force | Out-Null
+try {
 New-Item $nugetPackages -ItemType Directory -Force | Out-Null
 
-dotnet restore $solutionPath
-if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed." }
-dotnet build $solutionPath -c $Configuration --no-restore -p:ContinuousIntegrationBuild=true
-if ($LASTEXITCODE -ne 0) { throw "dotnet build failed." }
-dotnet pack $solutionPath -c $Configuration --no-build -p:Version=$PackageVersion -o $packageOutput
-if ($LASTEXITCODE -ne 0) { throw "dotnet pack failed." }
+$previousCompilePackages = $env:NUGET_PACKAGES
+try {
+    $env:NUGET_PACKAGES = $nugetPackages
+    dotnet restore $solutionPath --no-cache --disable-build-servers
+    if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed." }
+    dotnet build $solutionPath -c $Configuration --no-restore --disable-build-servers -p:ContinuousIntegrationBuild=true
+    if ($LASTEXITCODE -ne 0) { throw "dotnet build failed." }
+    dotnet pack $solutionPath -c $Configuration --no-build --disable-build-servers -p:PackageVersion=$PackageVersion -o $packageOutput
+    if ($LASTEXITCODE -ne 0) { throw "dotnet pack failed." }
+}
+finally {
+    if ($null -eq $previousCompilePackages) {
+        Remove-Item Env:NUGET_PACKAGES -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:NUGET_PACKAGES = $previousCompilePackages
+    }
+}
 
 $packageFile = Join-Path $packageOutput "$packageId.$PackageVersion.nupkg"
 $packageCacheId = $packageId.ToLowerInvariant()
@@ -47,6 +65,15 @@ New-Item $packageCachePath -ItemType Directory -Force | Out-Null
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::ExtractToDirectory($packageFile, $packageCachePath)
+$assemblyPath = Join-Path $packageCachePath "lib/net10.0/$packageId.dll"
+$assemblyName = [Reflection.AssemblyName]::GetAssemblyName($assemblyPath)
+if ($assemblyName.Version -ne [Version]"1.0.0.0") { throw "The packed Railway integration changed its published assembly identity." }
+[ordered]@{
+    packageVersion = $PackageVersion
+    assemblyIdentity = $assemblyName.FullName
+    assemblySha256 = (Get-FileHash -LiteralPath $assemblyPath -Algorithm SHA256).Hash
+    packageSha256 = (Get-FileHash -LiteralPath $packageFile -Algorithm SHA256).Hash
+} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageOutput "assembly-binding.json") -Encoding UTF8
 Copy-Item $packageFile (Join-Path $packageCachePath "$packageCacheId.$PackageVersion.nupkg")
 
 $packageBytes = [IO.File]::ReadAllBytes($packageFile)
@@ -115,4 +142,8 @@ finally {
     }
 
     Pop-Location
+}
+}
+finally {
+    Remove-SafeArtifact $nugetPackages
 }
