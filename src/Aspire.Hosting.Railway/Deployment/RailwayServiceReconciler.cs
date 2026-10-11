@@ -178,11 +178,29 @@ internal sealed class RailwayServiceReconciler
         bool variablesChanged = removedVariables.Length != 0 || variables.Any(pair => options.SealedVariables.Contains(pair.Key, StringComparer.Ordinal)
             ? (string?)identity["sealedFingerprints"]?[pair.Key] != sealedFingerprints?[pair.Key]
             : (string?)currentVariables[pair.Key] != pair.Value);
-        bool volumesChanged = await EnsureVolumesAsync(target, environment, serviceId, options, identity, saveIdentity, cancellationToken).ConfigureAwait(false);
+        bool regionChanged = false;
+        if (settings["multiRegionConfig"] is JsonObject desiredRegions)
+        {
+            string providerRegion = ResolveProviderRegion(options.Region!);
+            JsonNode? currentRegions = instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"];
+            if (!JsonNode.DeepEquals(currentRegions, desiredRegions) || (int?)instance["numReplicas"] != 1
+                || (string?)identity["configuredRegion"] != providerRegion)
+            {
+                await _client.SendAsync("mutation($input:ServiceInstanceUpdateInput!,$service:String!,$environment:String!){serviceInstanceUpdate(input:$input,serviceId:$service,environmentId:$environment)}",
+                    new { input = new { region = providerRegion, multiRegionConfig = desiredRegions, numReplicas = 1 }, service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
+                identity["configuredRegion"] = providerRegion;
+                await saveIdentity().ConfigureAwait(false);
+                regionChanged = true;
+            }
+        }
+        bool volumesChanged = await EnsureVolumesAsync(target, environment, serviceId, options, identity, saveIdentity, overall, cancellationToken).ConfigureAwait(false);
+        ValidateConfigurationDeadline(overall, options, cancellationToken);
         bool domainsChanged = await EnsureDomainsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
+        ValidateConfigurationDeadline(overall, options, cancellationToken);
         bool limitsChanged = await EnsureLimitsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
+        ValidateConfigurationDeadline(overall, options, cancellationToken);
         string? deploymentId = (string?)instance["latestDeployment"]?["id"];
-        bool deploy = created || settingsChanged || variablesChanged || volumesChanged || domainsChanged || limitsChanged
+        bool deploy = created || settingsChanged || variablesChanged || regionChanged || volumesChanged || domainsChanged || limitsChanged
             || deploymentId is null || options.WaitForCompletion || pending
             || (options.Build is not null && ((string?)identity["desiredFingerprint"] != desiredFingerprint
                 || (string?)identity["completedDeploymentId"] != deploymentId));
@@ -199,16 +217,7 @@ internal sealed class RailwayServiceReconciler
             }
             settings["registryCredentials"] = registryCredentials?.DeepClone();
 
-            if (settings["multiRegionConfig"] is JsonObject desiredRegions)
-            {
-                JsonNode? currentRegions = instance["latestDeployment"]?["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"];
-                if (!JsonNode.DeepEquals(currentRegions, desiredRegions) || (int?)instance["numReplicas"] != 1)
-                {
-                    await _client.SendAsync("mutation($input:ServiceInstanceUpdateInput!,$service:String!,$environment:String!){serviceInstanceUpdate(input:$input,serviceId:$service,environmentId:$environment)}",
-                        new { input = new { multiRegionConfig = desiredRegions, numReplicas = 1 }, service = serviceId, environment = target.EnvironmentId }, cancellationToken).ConfigureAwait(false);
-                }
-                settings.Remove("multiRegionConfig");
-            }
+            settings.Remove("multiRegionConfig");
 
             patchService["deploy"] = settings;
 
@@ -255,6 +264,10 @@ internal sealed class RailwayServiceReconciler
         try
         {
             string? deployedImage = await WaitForDeploymentAsync(target, serviceId, deploymentId!, image, options, options.DeploymentTimeout - overall.Elapsed, cancellationToken).ConfigureAwait(false);
+            if (options.Volumes.Count != 0)
+            {
+                ValidateVolumeDrift(await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false), serviceId, options, identity);
+            }
             identity["image"] = options.Build is null ? deployedImage : null;
             identity["imageDigest"] = options.Build is null ? deployedImage?[(deployedImage.IndexOf('@', StringComparison.Ordinal) + 1)..] : deployedImage;
             identity["buildFingerprint"] = options.Build is null ? null : image;
@@ -632,7 +645,7 @@ internal sealed class RailwayServiceReconciler
             throw new InvalidOperationException("Existing Railway volume mount drift requires operator reconciliation. No volume is deleted or moved.");
         }
 
-        if (options.Region is not null && attached.Any(volume => (string?)volume["region"] != ResolveRegion(options.Region)))
+        if (options.Region is not null && attached.Any(volume => !RegionMatches((string?)volume["region"], options.Region)))
         {
             throw new InvalidOperationException("Railway volume region drift requires an explicit operator migration; persistent data is never moved automatically.");
         }
@@ -644,13 +657,14 @@ internal sealed class RailwayServiceReconciler
         }
     }
 
-    private async Task<bool> EnsureVolumesAsync(RailwayResolvedTarget target, JsonObject environment, string serviceId, RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, CancellationToken cancellationToken)
+    private async Task<bool> EnsureVolumesAsync(RailwayResolvedTarget target, JsonObject environment, string serviceId, RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, Stopwatch overall, CancellationToken cancellationToken)
     {
         bool changed = false;
         JsonObject volumes = identity["volumes"]?.AsObject() ?? [];
         identity["volumes"] = volumes;
         foreach (RailwayVolumeOptions mount in options.Volumes)
         {
+            ValidateConfigurationDeadline(overall, options, cancellationToken);
             JsonNode? existing = environment["volumeInstances"]!["edges"]!.AsArray().Select(edge => edge!["node"]!)
                 .SingleOrDefault(volume => (string?)volume["serviceId"] == serviceId && (string?)volume["mountPath"] == mount.MountPath);
             string volumeId;
@@ -668,9 +682,77 @@ internal sealed class RailwayServiceReconciler
 
             volumes[mount.MountPath] = volumeId;
             await saveIdentity().ConfigureAwait(false);
+            if (existing is null)
+            {
+                await ValidateCreatedVolumeAsync(target, serviceId, volumeId, mount.MountPath, options, overall, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         return changed;
+    }
+
+    private async Task ValidateCreatedVolumeAsync(RailwayResolvedTarget target, string serviceId, string volumeId, string mountPath, RailwayServiceOptions options, Stopwatch overall, CancellationToken cancellationToken)
+    {
+        while (overall.Elapsed < options.DeploymentTimeout)
+        {
+            TimeSpan budget = options.DeploymentTimeout - overall.Elapsed;
+            if (budget <= TimeSpan.Zero)
+            { break; }
+            using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(budget);
+            JsonObject environment;
+            try
+            {
+                environment = await ReadEnvironmentAsync(target, deadline.Token).WaitAsync(deadline.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (overall.Elapsed >= options.DeploymentTimeout)
+            { break; }
+            JsonNode? volume = environment["volumeInstances"]!["edges"]!.AsArray().Select(edge => edge!["node"]!)
+                .SingleOrDefault(instance => (string?)instance["volumeId"] == volumeId);
+            if (volume is not null)
+            {
+                string? actualService = (string?)volume["serviceId"];
+                string? actualMount = (string?)volume["mountPath"];
+                string? actualRegion = (string?)volume["region"];
+                string? mismatch = null;
+                if (actualService is not null && actualService != serviceId)
+                { mismatch = "service binding"; }
+                else if (actualMount is not null && actualMount != mountPath)
+                { mismatch = "mount binding"; }
+                else if (options.Region is not null && actualRegion is not null && !RegionMatches(actualRegion, options.Region))
+                { mismatch = "region binding"; }
+                if (mismatch is not null)
+                {
+                    throw new InvalidOperationException($"The created Railway volume has a different {mismatch}. Reconcile it before deployment; persistent data is never moved automatically.");
+                }
+                if (actualService == serviceId && actualMount == mountPath
+                    && (options.Region is null || RegionMatches(actualRegion, options.Region)))
+                {
+                    return;
+                }
+            }
+            TimeSpan remaining = options.DeploymentTimeout - overall.Elapsed;
+            if (remaining > TimeSpan.Zero)
+            {
+                await Task.Delay(remaining < TimeSpan.FromSeconds(2) ? remaining : TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new TimeoutException("The created Railway volume did not establish its requested service, mount and region before its deployment deadline. Its recorded volume is retained for operator reconciliation.");
+    }
+
+    private static void ValidateConfigurationDeadline(Stopwatch overall, RailwayServiceOptions options, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (overall.Elapsed >= options.DeploymentTimeout)
+        {
+            throw new TimeoutException("Railway configuration exceeded its deployment deadline. Recorded service and volume identities are retained for operator reconciliation; no further configuration or deployment is requested.");
+        }
     }
 
     private async Task<JsonObject> ReadDomainsAsync(RailwayResolvedTarget target, string serviceId, CancellationToken cancellationToken)
@@ -764,6 +846,15 @@ internal sealed class RailwayServiceReconciler
             }
 
             string status = (string)deployment["status"]!;
+            if (options.Region is not null && status is "SUCCESS" or "SLEEPING")
+            {
+                JsonNode? actualRegions = deployment["meta"]?["serviceManifest"]?["deploy"]?["multiRegionConfig"];
+                JsonObject expectedRegions = new() { [ResolveRegion(options.Region)] = new JsonObject { ["numReplicas"] = 1 } };
+                if (!JsonNode.DeepEquals(actualRegions, expectedRegions))
+                {
+                    throw new InvalidOperationException("The exact Railway deployment does not prove the requested single region and replica count. Reconcile its configuration before retrying.");
+                }
+            }
             string? deployedImage = (string?)deployment["meta"]?["image"];
             if (options.Build is not null)
             {
@@ -827,6 +918,32 @@ internal sealed class RailwayServiceReconciler
 
         throw new ArgumentException("Unsupported Railway region identifier.", nameof(region));
     }
+
+    internal static string ResolveProviderRegion(string region)
+    {
+        string airport = ResolveRegion(region);
+        if (airport == "ams")
+        {
+            return "europe-west4-drams3a";
+        }
+        if (airport == "sfo")
+        {
+            return "us-west2";
+        }
+        if (airport == "iad")
+        {
+            return "us-east4-eqdc4a";
+        }
+        if (airport == "sin")
+        {
+            return "asia-southeast1-eqsg3a";
+        }
+        throw new ArgumentException("Unsupported Railway region identifier.", nameof(region));
+    }
+
+    private static bool RegionMatches(string? actual, string expected) => actual is not null
+        && (actual == ResolveRegion(expected) || actual == ResolveProviderRegion(expected)
+            || (ResolveRegion(expected) == "ams" && actual == "europe-west4"));
 }
 
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "This internal terminal-state signal deliberately accepts no provider message or credentials.")]

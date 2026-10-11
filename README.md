@@ -99,6 +99,7 @@ The [packed fixture](tests/Aspire.Hosting.Railway/Fixtures/TypeScriptAppHost) va
 - `CreateOrAdopt`: create a missing service or adopt a service marked for the same site/resource. Unmarked adoption additionally requires an explicit `ExistingServiceId`.
 - Cached IDs remain bound to site, project, environment, and name. Missing or replaced identities fail safely.
 - Volume identity, mount, region, and unexpected public-domain drift require operator reconciliation. Infrastructure is never deleted automatically.
+- Explicit region aliases configure Railway's provider region before volume creation. New volumes must prove their service, mount and region before deployment; incomplete creation metadata is polled within the shared deployment deadline, including in-flight reads, while known mismatches fail. A volume-confirmation timeout retains recorded identities and stops the remaining configuration and deployment stages. The completed deployment must retain the requested single region and replica count. Existing volume region drift still requires operator migration.
 - Pending application state allows retries without duplicate resources or skipping an unfinished deployment.
 
 ## Runtime and release configuration

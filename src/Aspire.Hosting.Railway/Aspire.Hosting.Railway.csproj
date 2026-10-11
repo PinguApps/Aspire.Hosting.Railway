@@ -4,6 +4,7 @@
     <PackageId>PinguApps.Aspire.Hosting.Railway</PackageId>
     <PackageIcon>icon.png</PackageIcon>
     <AssemblyName>PinguApps.Aspire.Hosting.Railway</AssemblyName>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <Description>Railway integration for Aspire.</Description>
     <EnableAspireIntegrationAnalyzers>true</EnableAspireIntegrationAnalyzers>
   </PropertyGroup>
