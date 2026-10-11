@@ -193,9 +193,12 @@ internal sealed class RailwayServiceReconciler
                 regionChanged = true;
             }
         }
-        bool volumesChanged = await EnsureVolumesAsync(target, environment, serviceId, options, identity, saveIdentity, cancellationToken).ConfigureAwait(false);
+        bool volumesChanged = await EnsureVolumesAsync(target, environment, serviceId, options, identity, saveIdentity, overall, cancellationToken).ConfigureAwait(false);
+        ValidateConfigurationDeadline(overall, options, cancellationToken);
         bool domainsChanged = await EnsureDomainsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
+        ValidateConfigurationDeadline(overall, options, cancellationToken);
         bool limitsChanged = await EnsureLimitsAsync(target, serviceId, options, cancellationToken).ConfigureAwait(false);
+        ValidateConfigurationDeadline(overall, options, cancellationToken);
         string? deploymentId = (string?)instance["latestDeployment"]?["id"];
         bool deploy = created || settingsChanged || variablesChanged || regionChanged || volumesChanged || domainsChanged || limitsChanged
             || deploymentId is null || options.WaitForCompletion || pending
@@ -654,13 +657,14 @@ internal sealed class RailwayServiceReconciler
         }
     }
 
-    private async Task<bool> EnsureVolumesAsync(RailwayResolvedTarget target, JsonObject environment, string serviceId, RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, CancellationToken cancellationToken)
+    private async Task<bool> EnsureVolumesAsync(RailwayResolvedTarget target, JsonObject environment, string serviceId, RailwayServiceOptions options, JsonObject identity, Func<Task> saveIdentity, Stopwatch overall, CancellationToken cancellationToken)
     {
         bool changed = false;
         JsonObject volumes = identity["volumes"]?.AsObject() ?? [];
         identity["volumes"] = volumes;
         foreach (RailwayVolumeOptions mount in options.Volumes)
         {
+            ValidateConfigurationDeadline(overall, options, cancellationToken);
             JsonNode? existing = environment["volumeInstances"]!["edges"]!.AsArray().Select(edge => edge!["node"]!)
                 .SingleOrDefault(volume => (string?)volume["serviceId"] == serviceId && (string?)volume["mountPath"] == mount.MountPath);
             string volumeId;
@@ -680,19 +684,34 @@ internal sealed class RailwayServiceReconciler
             await saveIdentity().ConfigureAwait(false);
             if (existing is null)
             {
-                await ValidateCreatedVolumeAsync(target, serviceId, volumeId, mount.MountPath, options, cancellationToken).ConfigureAwait(false);
+                await ValidateCreatedVolumeAsync(target, serviceId, volumeId, mount.MountPath, options, overall, cancellationToken).ConfigureAwait(false);
             }
         }
 
         return changed;
     }
 
-    private async Task ValidateCreatedVolumeAsync(RailwayResolvedTarget target, string serviceId, string volumeId, string mountPath, RailwayServiceOptions options, CancellationToken cancellationToken)
+    private async Task ValidateCreatedVolumeAsync(RailwayResolvedTarget target, string serviceId, string volumeId, string mountPath, RailwayServiceOptions options, Stopwatch overall, CancellationToken cancellationToken)
     {
-        Stopwatch timer = Stopwatch.StartNew();
-        while (timer.Elapsed < options.DeploymentTimeout)
+        while (overall.Elapsed < options.DeploymentTimeout)
         {
-            JsonObject environment = await ReadEnvironmentAsync(target, cancellationToken).ConfigureAwait(false);
+            TimeSpan budget = options.DeploymentTimeout - overall.Elapsed;
+            if (budget <= TimeSpan.Zero)
+            { break; }
+            using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(budget);
+            JsonObject environment;
+            try
+            {
+                environment = await ReadEnvironmentAsync(target, deadline.Token).WaitAsync(deadline.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (overall.Elapsed >= options.DeploymentTimeout)
+            { break; }
             JsonNode? volume = environment["volumeInstances"]!["edges"]!.AsArray().Select(edge => edge!["node"]!)
                 .SingleOrDefault(instance => (string?)instance["volumeId"] == volumeId);
             if (volume is not null)
@@ -717,13 +736,23 @@ internal sealed class RailwayServiceReconciler
                     return;
                 }
             }
-            TimeSpan remaining = options.DeploymentTimeout - timer.Elapsed;
+            TimeSpan remaining = options.DeploymentTimeout - overall.Elapsed;
             if (remaining > TimeSpan.Zero)
             {
                 await Task.Delay(remaining < TimeSpan.FromSeconds(2) ? remaining : TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
             }
         }
+        cancellationToken.ThrowIfCancellationRequested();
         throw new TimeoutException("The created Railway volume did not establish its requested service, mount and region before its deployment deadline. Its recorded volume is retained for operator reconciliation.");
+    }
+
+    private static void ValidateConfigurationDeadline(Stopwatch overall, RailwayServiceOptions options, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (overall.Elapsed >= options.DeploymentTimeout)
+        {
+            throw new TimeoutException("Railway configuration exceeded its deployment deadline. Recorded service and volume identities are retained for operator reconciliation; no further configuration or deployment is requested.");
+        }
     }
 
     private async Task<JsonObject> ReadDomainsAsync(RailwayResolvedTarget target, string serviceId, CancellationToken cancellationToken)

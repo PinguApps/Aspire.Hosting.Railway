@@ -83,6 +83,43 @@ Feature: Persistent Railway volumes remain in the requested region
     Then no deployment was requested
     And the created volume remains recorded for operator reconciliation
 
+  Scenario Outline: In-flight created volume reads cannot accept proof after the deployment deadline
+    Given a Railway service with region alias ams
+    And it needs a new persistent volume
+    And a created volume read takes longer than the deployment budget and <behavior> cancellation
+    When the created volume readback reaches its deadline
+    Then the deployment deadline stops the in-flight read without caller cancellation
+    And no deployment was requested
+    And the created volume remains recorded for operator reconciliation
+    Examples:
+      | behavior |
+      | observes |
+      | ignores  |
+
+  Scenario: All newly created volumes share the deployment deadline
+    Given a Railway service with region alias ams
+    And two new volume proofs together exceed one deployment budget
+    When the created volume readback reaches its deadline
+    Then the deployment deadline stops the in-flight read without caller cancellation
+    And no deployment was requested
+    And both created volume IDs remain recorded
+
+  Scenario: Caller cancellation during new volume proof is preserved
+    Given a Railway service with region alias ams
+    And it needs a new persistent volume
+    And the caller cancels during the created volume read
+    When the cancelled regional service is applied
+    Then caller cancellation remains cancellation
+    And no deployment was requested
+
+  Scenario: Volume creation cannot start after earlier configuration consumed the deployment budget
+    Given a Railway service with region alias ams
+    And it needs a new persistent volume
+    And region configuration exhausts the deployment budget
+    When the created volume readback reaches its deadline
+    Then no volume is created after the expired configuration budget
+    And no deployment was requested
+
   Scenario: A successful deployment cannot silently fall back to another region
     Given a Railway service with region alias ams
     And the deployment materializes in SFO

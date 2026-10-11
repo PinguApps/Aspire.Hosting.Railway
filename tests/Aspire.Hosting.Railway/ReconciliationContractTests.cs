@@ -872,6 +872,10 @@ public sealed class ReconciliationContractTests
         internal string CreatedVolumeIncompleteField { get; set; } = "serviceId";
         internal int CreatedVolumeIncompleteReads { get; set; }
         internal int IncompleteVolumeReadCount { get; private set; }
+        internal TimeSpan CreatedVolumeReadDelay { get; set; }
+        internal bool IgnoreCreatedVolumeReadCancellation { get; set; }
+        internal Action? CreatedVolumeRead { get; set; }
+        internal TimeSpan RegionUpdateDelay { get; set; }
         internal string? ForcedDeploymentRegion { get; set; }
         internal bool MaterializeDefaultWithoutExplicitRegion { get; set; }
         internal string Status { get; set; } = "SUCCESS";
@@ -955,6 +959,8 @@ public sealed class ReconciliationContractTests
                 JsonArray volumes = Volumes.DeepClone().AsArray();
                 if (volumes.Count != 0 && Operations.Contains("volume-create"))
                 {
+                    CreatedVolumeRead?.Invoke();
+                    await Task.Delay(CreatedVolumeReadDelay, IgnoreCreatedVolumeReadCancellation ? CancellationToken.None : cancellationToken);
                     if (CreatedVolumeIncompleteReads > 0)
                     {
                         CreatedVolumeIncompleteReads--;
@@ -1058,6 +1064,7 @@ public sealed class ReconciliationContractTests
             }
             else if (query.Contains("serviceInstanceUpdate(", StringComparison.Ordinal))
             {
+                await Task.Delay(RegionUpdateDelay, cancellationToken);
                 Operations.Add("region-update");
                 Regions = args["input"]!["multiRegionConfig"]!.DeepClone().AsObject();
                 ConfiguredProviderRegion = (string?)args["input"]!["region"];

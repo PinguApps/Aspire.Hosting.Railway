@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Aspire.Hosting.Railway.Deployment;
 using Aspire.Hosting.Railway.Management;
@@ -17,6 +18,9 @@ public sealed class VolumeRegionSteps : IDisposable
     private int _mutationsBeforeReplay;
     private RailwayServiceResult? _first;
     private RailwayServiceResult? _replay;
+    private CancellationTokenSource? _callerCancellation;
+    private bool _outerDeadlineReached;
+    private TimeSpan _applyElapsed;
 
     [Given("a Railway service with region alias (.*)")]
     public void Region(string region) => _options.Region = region;
@@ -49,6 +53,37 @@ public sealed class VolumeRegionSteps : IDisposable
     {
         _provider.CreatedVolumeIncompleteReads = int.MaxValue;
         _options.DeploymentTimeout = TimeSpan.FromMilliseconds(100);
+    }
+
+    [Given("a created volume read takes longer than the deployment budget and (.*) cancellation")]
+    public void SlowVolumeRead(string behavior)
+    {
+        _options.DeploymentTimeout = TimeSpan.FromMilliseconds(250);
+        _provider.CreatedVolumeReadDelay = TimeSpan.FromSeconds(2);
+        _provider.IgnoreCreatedVolumeReadCancellation = behavior == "ignores";
+    }
+
+    [Given("two new volume proofs together exceed one deployment budget")]
+    public void SharedVolumeBudget()
+    {
+        NewVolume();
+        _options.Volumes.Add(new() { MountPath = "/second" });
+        _options.DeploymentTimeout = TimeSpan.FromMilliseconds(900);
+        _provider.CreatedVolumeReadDelay = TimeSpan.FromMilliseconds(700);
+    }
+
+    [Given("region configuration exhausts the deployment budget")]
+    public void ConfigurationBudget()
+    {
+        _options.DeploymentTimeout = TimeSpan.FromMilliseconds(250);
+        _provider.RegionUpdateDelay = TimeSpan.FromMilliseconds(600);
+    }
+
+    [Given("the caller cancels during the created volume read")]
+    public void CancelVolumeRead()
+    {
+        _callerCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        _provider.CreatedVolumeRead = _callerCancellation.Cancel;
     }
 
     [Given("the created volume has (.*) drift")]
@@ -95,9 +130,42 @@ public sealed class VolumeRegionSteps : IDisposable
     [When("the created volume readback reaches its deadline")]
     public async Task ReadbackDeadline()
     {
-        _error = await Record.ExceptionAsync(ApplyAsync);
+        using CancellationTokenSource outer = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        outer.CancelAfter(TimeSpan.FromSeconds(3));
+        Stopwatch elapsed = Stopwatch.StartNew();
+        _error = await Record.ExceptionAsync(() => ApplyAsync(outer.Token));
+        _applyElapsed = elapsed.Elapsed;
+        _outerDeadlineReached = outer.IsCancellationRequested;
         Assert.IsType<TimeoutException>(_error);
     }
+
+    [When("the cancelled regional service is applied")]
+    public async Task Cancelled()
+    {
+        _error = await Record.ExceptionAsync(() => ApplyAsync(_callerCancellation!.Token));
+        Assert.IsAssignableFrom<OperationCanceledException>(_error);
+    }
+
+    [Then("the deployment deadline stops the in-flight read without caller cancellation")]
+    public void OwnDeadline()
+    {
+        Assert.False(_outerDeadlineReached);
+        Assert.True(_applyElapsed < _options.DeploymentTimeout + TimeSpan.FromMilliseconds(300),
+            $"The operation took {_applyElapsed} with a deployment budget of {_options.DeploymentTimeout}.");
+    }
+
+    [Then("both created volume IDs remain recorded")]
+    public void BothVolumesRecorded()
+    {
+        Assert.Equal("volume-0", (string?)_identity["volumes"]?["/data"]);
+        Assert.Equal("volume-1", (string?)_identity["volumes"]?["/second"]);
+    }
+
+    [Then("no volume is created after the expired configuration budget")]
+    public void NoLateVolume() => Assert.Empty(_provider.Volumes);
+
+    [Then("caller cancellation remains cancellation")]
+    public void CallerCancellation() => Assert.True(_callerCancellation!.IsCancellationRequested);
 
     [Then("the explicit provider region is (.*)")]
     public void ProviderRegion(string region) => Assert.Equal(region, _provider.ConfiguredProviderRegion);
@@ -169,14 +237,20 @@ public sealed class VolumeRegionSteps : IDisposable
     [Then("the Railway integration assembly version is 1.0.0.0")]
     public void AssemblyIdentity() => Assert.Equal(new Version(1, 0, 0, 0), typeof(RailwayServiceOptions).Assembly.GetName().Version);
 
-    private async Task<RailwayServiceResult> ApplyAsync()
+    private Task<RailwayServiceResult> ApplyAsync() => ApplyAsync(TestContext.Current.CancellationToken);
+
+    private async Task<RailwayServiceResult> ApplyAsync(CancellationToken cancellationToken)
     {
         using HttpClient http = new(_provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(http, "secret-token", RailwayAuthenticationMode.ProjectToken));
         return await reconciler.ApplyAsync(new RailwayResolvedTarget("project", "environment", "site", new()),
             "web", "web", _options.Build is null ? Image : "source:explicit-snapshot", _options, new(StringComparer.Ordinal), _identity, () => Task.CompletedTask,
-            TestContext.Current.CancellationToken, upload: _options.Build is null ? null : (_, _, _) => Task.FromResult(_provider.UploadSource()));
+            cancellationToken, upload: _options.Build is null ? null : (_, _, _) => Task.FromResult(_provider.UploadSource()));
     }
 
-    public void Dispose() => _provider.Dispose();
+    public void Dispose()
+    {
+        _callerCancellation?.Dispose();
+        _provider.Dispose();
+    }
 }
