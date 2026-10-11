@@ -1,0 +1,146 @@
+using System.Text.Json.Nodes;
+using Aspire.Hosting.Railway.Deployment;
+using Aspire.Hosting.Railway.Management;
+using Reqnroll;
+using Xunit;
+
+namespace Aspire.Hosting.Railway.Tests;
+
+[Binding]
+public sealed class VolumeRegionSteps : IDisposable
+{
+    private const string Image = "example/image@sha256:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private readonly ReconciliationContractTests.Provider _provider = new();
+    private readonly RailwayServiceOptions _options = new();
+    private readonly JsonObject _identity = [];
+    private Exception? _error;
+    private int _mutationsBeforeReplay;
+    private RailwayServiceResult? _first;
+    private RailwayServiceResult? _replay;
+
+    [Given("a Railway service with region alias (.*)")]
+    public void Region(string region) => _options.Region = region;
+
+    [Given("it needs a new persistent volume")]
+    public void NewVolume() => _options.Volumes.Add(new() { MountPath = "/data" });
+
+    [Given("Railway defaults deployments without an explicit service region to SFO")]
+    public void ProviderDefault() => _provider.MaterializeDefaultWithoutExplicitRegion = true;
+
+    [Given("the regional workload uses a source build")]
+    public void SourceBuild() => _options.Build = new RailwayBuildOptions { ContextPath = Path.GetTempPath() };
+
+    [Given("the created volume has (.*) drift")]
+    public void CreatedDrift(string field) => _provider.CreatedVolumeDrift = field;
+
+    [Given("the deployment materializes in SFO")]
+    public void DeploymentDrift() => _provider.ForcedDeploymentRegion = "sfo";
+
+    [Given("an existing owned volume is in SFO")]
+    public void ExistingDrift() => ExistingVolume("sfo");
+
+    [Given("an existing owned volume reports its Amsterdam provider name")]
+    public void ExistingProviderName() => ExistingVolume("europe-west4-drams3a");
+
+    private void ExistingVolume(string region)
+    {
+        NewVolume();
+        _provider.CreateService(marked: true);
+        _provider.Volumes.Add(new JsonObject
+        {
+            ["node"] = new JsonObject
+            { ["volumeId"] = "existing-volume", ["serviceId"] = "service", ["mountPath"] = "/data", ["region"] = region }
+        });
+    }
+
+    [When("the regional service is deployed")]
+    public async Task Deploy() => _first = await ApplyAsync();
+
+    [When("the regional service is deployed twice")]
+    public async Task DeployTwice()
+    {
+        await Deploy();
+        _mutationsBeforeReplay = _provider.Mutations;
+        _replay = await ApplyAsync();
+    }
+
+    [When("the regional service is rejected")]
+    public async Task Rejected()
+    {
+        _error = await Record.ExceptionAsync(ApplyAsync);
+        Assert.IsType<InvalidOperationException>(_error);
+    }
+
+    [Then("the explicit provider region is (.*)")]
+    public void ProviderRegion(string region) => Assert.Equal(region, _provider.ConfiguredProviderRegion);
+
+    [Then("the deployment has one replica in (.*)")]
+    public void SingleReplica(string region)
+    {
+        Assert.Equal(region, Assert.Single(_provider.Regions).Key);
+        Assert.Equal(1, (int)_provider.Regions[region]!["numReplicas"]!);
+    }
+
+    [Then("region configuration precedes volume creation and deployment")]
+    public void Ordering()
+    {
+        Assert.True(_provider.Operations.IndexOf("region-update") < _provider.Operations.IndexOf("volume-create"));
+        Assert.True(_provider.Operations.IndexOf("volume-create") < _provider.Operations.IndexOf("deployment"));
+        Assert.Equal("europe-west4-drams3a", _provider.ConfiguredProviderRegion);
+    }
+
+    [Then("the unchanged replay has no provider mutations")]
+    public void Replay()
+    {
+        Assert.Equal(_mutationsBeforeReplay, _provider.Mutations);
+        Assert.False(_replay!.Deployed);
+        Assert.Equal(_first!.ServiceId, _replay.ServiceId);
+        Assert.Equal(_first.DeploymentId, _replay.DeploymentId);
+    }
+
+    [Then("the persistent volume remains in AMS")]
+    public void VolumeRegion()
+    {
+        string region = (string)Assert.Single(_provider.Volumes)!["node"]!["region"]!;
+        Assert.True(region is "ams" or "europe-west4-drams3a");
+    }
+
+    [Then("no deployment was requested")]
+    public void NoDeployment() => Assert.Equal(0, _provider.DeployRequests);
+
+    [Then("no provider mutation or deployment was requested")]
+    public void ReadOnly()
+    {
+        NoDeployment();
+        Assert.Equal(0, _provider.Mutations);
+    }
+
+    [Then("the created volume remains recorded for operator reconciliation")]
+    public void RecordedVolume()
+    {
+        Assert.Equal("volume-0", (string?)_identity["volumes"]?["/data"]);
+        Assert.Contains("created Railway volume", _error!.Message, StringComparison.Ordinal);
+    }
+
+    [Then("its sent deployment remains recorded for reconciliation")]
+    public void RecordedDeployment()
+    {
+        Assert.True((bool?)_identity["pending"]);
+        Assert.True((bool?)_identity["deploymentAttempt"]?["sent"]);
+        Assert.Contains("requested single region", _error!.Message, StringComparison.Ordinal);
+    }
+
+    [Then("the Railway integration assembly version is 1.0.0.0")]
+    public void AssemblyIdentity() => Assert.Equal(new Version(1, 0, 0, 0), typeof(RailwayServiceOptions).Assembly.GetName().Version);
+
+    private async Task<RailwayServiceResult> ApplyAsync()
+    {
+        using HttpClient http = new(_provider, disposeHandler: false);
+        RailwayServiceReconciler reconciler = new(new RailwayManagementClient(http, "secret-token", RailwayAuthenticationMode.ProjectToken));
+        return await reconciler.ApplyAsync(new RailwayResolvedTarget("project", "environment", "site", new()),
+            "web", "web", _options.Build is null ? Image : "source:explicit-snapshot", _options, new(StringComparer.Ordinal), _identity, () => Task.CompletedTask,
+            TestContext.Current.CancellationToken, upload: _options.Build is null ? null : (_, _, _) => Task.FromResult(_provider.UploadSource()));
+    }
+
+    public void Dispose() => _provider.Dispose();
+}

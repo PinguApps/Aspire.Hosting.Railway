@@ -12,7 +12,7 @@ if ($PackageVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw "Pa
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $packages = Join-Path $repoRoot "artifacts/live-source-builds/packages"
 New-Item -ItemType Directory -Path $packages -Force | Out-Null
-dotnet pack (Join-Path $repoRoot "src/Aspire.Hosting.Railway/Aspire.Hosting.Railway.csproj") -c Release "-p:Version=$PackageVersion" -o $packages
+dotnet pack (Join-Path $repoRoot "src/Aspire.Hosting.Railway/Aspire.Hosting.Railway.csproj") -c Release "-p:PackageVersion=$PackageVersion" -o $packages
 if ($LASTEXITCODE -ne 0) { throw "Packing the local Railway package failed." }
 
 if (-not $WorkDirectory) {
