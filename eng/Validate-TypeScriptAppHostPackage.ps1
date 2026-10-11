@@ -17,6 +17,9 @@ function Remove-SafeArtifact {
         throw "Artifact removal escaped its intended directory."
     }
     Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $target) {
+        throw "Artifact removal did not complete."
+    }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -31,16 +34,17 @@ $packageId = "PinguApps.Aspire.Hosting.Railway"
 Remove-SafeArtifact $packageOutput
 Remove-SafeArtifact $fixtureWork
 New-Item $packageOutput -ItemType Directory -Force | Out-Null
+try {
 New-Item $nugetPackages -ItemType Directory -Force | Out-Null
 
 $previousCompilePackages = $env:NUGET_PACKAGES
 try {
     $env:NUGET_PACKAGES = $nugetPackages
-    dotnet restore $solutionPath --no-cache
+    dotnet restore $solutionPath --no-cache --disable-build-servers
     if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed." }
-    dotnet build $solutionPath -c $Configuration --no-restore -p:ContinuousIntegrationBuild=true
+    dotnet build $solutionPath -c $Configuration --no-restore --disable-build-servers -p:ContinuousIntegrationBuild=true
     if ($LASTEXITCODE -ne 0) { throw "dotnet build failed." }
-    dotnet pack $solutionPath -c $Configuration --no-build -p:PackageVersion=$PackageVersion -o $packageOutput
+    dotnet pack $solutionPath -c $Configuration --no-build --disable-build-servers -p:PackageVersion=$PackageVersion -o $packageOutput
     if ($LASTEXITCODE -ne 0) { throw "dotnet pack failed." }
 }
 finally {
@@ -138,4 +142,8 @@ finally {
     }
 
     Pop-Location
+}
+}
+finally {
+    Remove-SafeArtifact $nugetPackages
 }
