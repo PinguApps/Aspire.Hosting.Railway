@@ -30,6 +30,27 @@ public sealed class VolumeRegionSteps : IDisposable
     [Given("the regional workload uses a source build")]
     public void SourceBuild() => _options.Build = new RailwayBuildOptions { ContextPath = Path.GetTempPath() };
 
+    [Given("the regional volume workload uses (.*) publishing")]
+    public void PublishingMode(string mode)
+    {
+        if (mode == "source")
+        { SourceBuild(); }
+    }
+
+    [Given("the created volume initially omits its (.*) proof")]
+    public void IncompleteCreatedVolume(string field)
+    {
+        _provider.CreatedVolumeIncompleteField = field == "service" ? "serviceId" : "region";
+        _provider.CreatedVolumeIncompleteReads = 1;
+    }
+
+    [Given("the created volume never supplies its service proof")]
+    public void IncompleteForever()
+    {
+        _provider.CreatedVolumeIncompleteReads = int.MaxValue;
+        _options.DeploymentTimeout = TimeSpan.FromMilliseconds(100);
+    }
+
     [Given("the created volume has (.*) drift")]
     public void CreatedDrift(string field) => _provider.CreatedVolumeDrift = field;
 
@@ -71,6 +92,13 @@ public sealed class VolumeRegionSteps : IDisposable
         Assert.IsType<InvalidOperationException>(_error);
     }
 
+    [When("the created volume readback reaches its deadline")]
+    public async Task ReadbackDeadline()
+    {
+        _error = await Record.ExceptionAsync(ApplyAsync);
+        Assert.IsType<TimeoutException>(_error);
+    }
+
     [Then("the explicit provider region is (.*)")]
     public void ProviderRegion(string region) => Assert.Equal(region, _provider.ConfiguredProviderRegion);
 
@@ -87,6 +115,14 @@ public sealed class VolumeRegionSteps : IDisposable
         Assert.True(_provider.Operations.IndexOf("region-update") < _provider.Operations.IndexOf("volume-create"));
         Assert.True(_provider.Operations.IndexOf("volume-create") < _provider.Operations.IndexOf("deployment"));
         Assert.Equal("europe-west4-drams3a", _provider.ConfiguredProviderRegion);
+    }
+
+    [Then("the volume binding completes before deployment")]
+    public void CompleteBinding()
+    {
+        Assert.Equal(1, _provider.IncompleteVolumeReadCount);
+        Assert.True(_provider.Operations.IndexOf("incomplete-volume-read") < _provider.Operations.IndexOf("volume-proof-read"));
+        Assert.True(_provider.Operations.IndexOf("volume-proof-read") < _provider.Operations.IndexOf("deployment"));
     }
 
     [Then("the unchanged replay has no provider mutations")]

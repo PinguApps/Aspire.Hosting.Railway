@@ -869,6 +869,9 @@ public sealed class ReconciliationContractTests
         internal string? ConfiguredProviderRegion { get; private set; }
         internal List<string> Operations { get; } = [];
         internal string? CreatedVolumeDrift { get; set; }
+        internal string CreatedVolumeIncompleteField { get; set; } = "serviceId";
+        internal int CreatedVolumeIncompleteReads { get; set; }
+        internal int IncompleteVolumeReadCount { get; private set; }
         internal string? ForcedDeploymentRegion { get; set; }
         internal bool MaterializeDefaultWithoutExplicitRegion { get; set; }
         internal string Status { get; set; } = "SUCCESS";
@@ -949,10 +952,25 @@ public sealed class ReconciliationContractTests
             }
             else if (query.Contains("serviceInstances", StringComparison.Ordinal))
             {
+                JsonArray volumes = Volumes.DeepClone().AsArray();
+                if (volumes.Count != 0 && Operations.Contains("volume-create"))
+                {
+                    if (CreatedVolumeIncompleteReads > 0)
+                    {
+                        CreatedVolumeIncompleteReads--;
+                        IncompleteVolumeReadCount++;
+                        volumes.Last()!["node"]![CreatedVolumeIncompleteField] = null;
+                        Operations.Add("incomplete-volume-read");
+                    }
+                    else
+                    {
+                        Operations.Add("volume-proof-read");
+                    }
+                }
                 data["environment"] = new JsonObject
                 {
                     ["serviceInstances"] = new JsonObject { ["edges"] = _service is null ? [] : new JsonArray(new JsonObject { ["node"] = _service.DeepClone() }) },
-                    ["volumeInstances"] = new JsonObject { ["edges"] = Volumes.DeepClone() },
+                    ["volumeInstances"] = new JsonObject { ["edges"] = volumes },
                 };
             }
             else if (query.Contains("deployments(input:", StringComparison.Ordinal))

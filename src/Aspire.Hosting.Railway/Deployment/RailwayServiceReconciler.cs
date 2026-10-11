@@ -697,16 +697,33 @@ internal sealed class RailwayServiceReconciler
                 .SingleOrDefault(instance => (string?)instance["volumeId"] == volumeId);
             if (volume is not null)
             {
-                if ((string?)volume["serviceId"] != serviceId || (string?)volume["mountPath"] != mountPath
-                    || (options.Region is not null && !RegionMatches((string?)volume["region"], options.Region)))
+                string? actualService = (string?)volume["serviceId"];
+                string? actualMount = (string?)volume["mountPath"];
+                string? actualRegion = (string?)volume["region"];
+                string? mismatch = null;
+                if (actualService is not null && actualService != serviceId)
+                { mismatch = "service binding"; }
+                else if (actualMount is not null && actualMount != mountPath)
+                { mismatch = "mount binding"; }
+                else if (options.Region is not null && actualRegion is not null && !RegionMatches(actualRegion, options.Region))
+                { mismatch = "region binding"; }
+                if (mismatch is not null)
                 {
-                    throw new InvalidOperationException("The created Railway volume does not prove its requested service, mount and region. Reconcile it before deployment; persistent data is never moved automatically.");
+                    throw new InvalidOperationException($"The created Railway volume has a different {mismatch}. Reconcile it before deployment; persistent data is never moved automatically.");
                 }
-                return;
+                if (actualService == serviceId && actualMount == mountPath
+                    && (options.Region is null || RegionMatches(actualRegion, options.Region)))
+                {
+                    return;
+                }
             }
-            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            TimeSpan remaining = options.DeploymentTimeout - timer.Elapsed;
+            if (remaining > TimeSpan.Zero)
+            {
+                await Task.Delay(remaining < TimeSpan.FromSeconds(2) ? remaining : TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            }
         }
-        throw new TimeoutException("The created Railway volume was not visible before its deployment deadline.");
+        throw new TimeoutException("The created Railway volume did not establish its requested service, mount and region before its deployment deadline. Its recorded volume is retained for operator reconciliation.");
     }
 
     private async Task<JsonObject> ReadDomainsAsync(RailwayResolvedTarget target, string serviceId, CancellationToken cancellationToken)
