@@ -1,0 +1,3 @@
+# PR Agent review exclusions; Git tracking and builds are unaffected.
+# No current tracked artifacts justify exclusion; keep all files reviewable.
+# Use $pragent-ignore before adding narrow, generator-backed exclusions.
