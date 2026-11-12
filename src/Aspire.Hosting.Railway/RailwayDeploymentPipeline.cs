@@ -30,7 +30,7 @@ internal static class RailwayDeploymentPipeline
         RailwayResolvedTarget target = new(projectId, environmentId, siteKey, resource.Options);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(_httpClient, token, resource.Options.AuthenticationMode));
         IDeploymentStateManager manager = context.Services.GetRequiredService<IDeploymentStateManager>();
-        HashSet<string> names = new(StringComparer.Ordinal);
+        HashSet<string> names = [with(StringComparer.Ordinal)];
         foreach (IResource candidate in context.Model.Resources)
         {
             RailwayServiceAnnotation? annotation = candidate.Annotations.OfType<RailwayServiceAnnotation>().SingleOrDefault();
@@ -95,7 +95,7 @@ internal static class RailwayDeploymentPipeline
         {
             RailwayServiceValidation.ValidateImage(image);
         }
-        Dictionary<string, object> rawEnvironment = new(StringComparer.Ordinal);
+        Dictionary<string, object> rawEnvironment = [with(StringComparer.Ordinal)];
         EnvironmentCallbackContext environmentContext = new(context.ExecutionContext, resource, rawEnvironment, cancellationToken)
         {
             Logger = context.Logger,
@@ -105,7 +105,7 @@ internal static class RailwayDeploymentPipeline
             await callback.Callback(environmentContext).ConfigureAwait(false);
         }
 
-        Dictionary<string, string> environment = new(StringComparer.Ordinal);
+        Dictionary<string, string> environment = [with(StringComparer.Ordinal)];
         foreach (KeyValuePair<string, object> variable in rawEnvironment)
         {
             string? value = await ResolveRuntimeValueAsync(variable.Value, valueContext, cancellationToken).ConfigureAwait(false);
@@ -186,7 +186,7 @@ internal static class RailwayDeploymentPipeline
 
     internal static Dictionary<string, string> GetSealedFingerprints(string resourceName, string token, IEnumerable<string> names, IReadOnlyDictionary<string, string> environment)
     {
-        Dictionary<string, string> fingerprints = new(StringComparer.Ordinal);
+        Dictionary<string, string> fingerprints = [with(StringComparer.Ordinal)];
         foreach (string name in names)
         {
             if (!environment.TryGetValue(name, out string? value))
