@@ -62,7 +62,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 - Package: `PinguApps.Aspire.Hosting.Railway`.
 - Target framework: `.NET 10`.
-- Target Aspire version: `13.6.4`.
+- Target Aspire version: `13.6.5`.
 - Preserve normal local Aspire behavior; publishing is deploy-only and opt-in.
 - Validate scoped credentials and live ownership before any mutation. Never auto-delete infrastructure.
 - Never place control-plane tokens in workload configuration or diagnostics.

@@ -80,7 +80,7 @@ public sealed class ReconciliationContractTests
         RailwayServiceOptions options = new() { WaitForCompletion = true, RestartPolicy = RailwayRestartPolicy.Never };
         using HttpClient httpClient = new(provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, options, [with(StringComparer.Ordinal)], identity, () => Task.CompletedTask, cancellation.Token));
         Assert.True((bool)identity["deploymentAttempt"]!["sent"]!);
         provider.CorrelationRead = null;
         provider.MissingCorrelationResponses = 0;
@@ -100,7 +100,7 @@ public sealed class ReconciliationContractTests
         outerBound.CancelAfter(TimeSpan.FromSeconds(5));
         using HttpClient httpClient = new(provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
-        TimeoutException error = await Assert.ThrowsAsync<TimeoutException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, options, new(StringComparer.Ordinal), identity, () => Task.CompletedTask, outerBound.Token));
+        TimeoutException error = await Assert.ThrowsAsync<TimeoutException>(() => reconciler.ApplyAsync(Target(), "web", "web", Image, options, [with(StringComparer.Ordinal)], identity, () => Task.CompletedTask, outerBound.Token));
         Assert.Contains("association", error.Message, StringComparison.Ordinal);
         Assert.False(outerBound.IsCancellationRequested);
         Assert.Single(provider.CorrelationReadIds);
@@ -822,7 +822,7 @@ public sealed class ReconciliationContractTests
     {
         HttpClient httpClient = new(provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(httpClient, "secret-token", RailwayAuthenticationMode.ProjectToken));
-        return reconciler.ApplyAsync(Target(), "web", "web", image, options, variables ?? new(StringComparer.Ordinal), identity, saveIdentity ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
+        return reconciler.ApplyAsync(Target(), "web", "web", image, options, variables ?? [with(StringComparer.Ordinal)], identity, saveIdentity ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
     }
 
     internal sealed class Provider : HttpMessageHandler
@@ -859,8 +859,8 @@ public sealed class ReconciliationContractTests
         internal string? DeployedImage { get; private set; }
         internal bool LastDeployWasFromSource { get; private set; }
         private readonly JsonArray _deploymentIds = [];
-        private readonly Dictionary<string, string?> _deploymentImages = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, string> _deploymentMarkers = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string?> _deploymentImages = [with(StringComparer.Ordinal)];
+        private readonly Dictionary<string, string> _deploymentMarkers = [with(StringComparer.Ordinal)];
         private JsonObject _deploySettings = [];
         private JsonNode? _lastCommittedPatch;
         internal List<string> AcceptedRequestMarkers { get; } = [];
@@ -886,7 +886,7 @@ public sealed class ReconciliationContractTests
         internal JsonArray TcpProxies { get; } = [];
         private JsonObject? _service;
         private readonly JsonObject _variables = [];
-        private readonly HashSet<string> _sealedNames = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _sealedNames = [with(StringComparer.Ordinal)];
 
         internal bool ContainsVariable(string name) => _variables.ContainsKey(name) || _sealedNames.Contains(name);
 

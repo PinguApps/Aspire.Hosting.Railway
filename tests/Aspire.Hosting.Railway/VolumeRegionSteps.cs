@@ -244,7 +244,7 @@ public sealed class VolumeRegionSteps : IDisposable
         using HttpClient http = new(_provider, disposeHandler: false);
         RailwayServiceReconciler reconciler = new(new RailwayManagementClient(http, "secret-token", RailwayAuthenticationMode.ProjectToken));
         return await reconciler.ApplyAsync(new RailwayResolvedTarget("project", "environment", "site", new()),
-            "web", "web", _options.Build is null ? Image : "source:explicit-snapshot", _options, new(StringComparer.Ordinal), _identity, () => Task.CompletedTask,
+            "web", "web", _options.Build is null ? Image : "source:explicit-snapshot", _options, [with(StringComparer.Ordinal)], _identity, () => Task.CompletedTask,
             cancellationToken, upload: _options.Build is null ? null : (_, _, _) => Task.FromResult(_provider.UploadSource()));
     }
 
