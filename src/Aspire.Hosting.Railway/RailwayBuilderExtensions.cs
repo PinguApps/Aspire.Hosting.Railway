@@ -1,7 +1,7 @@
-#pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREPIPELINES003
 
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Dotnet;
 using Aspire.Hosting.Pipelines;
 
 namespace Aspire.Hosting.Railway;
@@ -44,7 +44,7 @@ public static class RailwayBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(target);
-        if (builder.Resource is not (ProjectResource or ContainerResource))
+        if (builder.Resource is not (ProjectResource or DotnetProjectResource or ContainerResource))
         {
             throw new ArgumentException("Railway publishes project and container resources.", nameof(builder));
         }
@@ -132,6 +132,13 @@ public static class RailwayBuilderExtensions
         IResourceBuilder<RailwayTargetResource> target,
         RailwayServiceOptionsDto? options = null) => builder.PublishToRailway(target, options is null ? null : options.ApplyTo);
 
+    /// <summary>Publishes a .NET project from a TypeScript AppHost.</summary>
+    [AspireExport("pinguapps.railway.dotnetProject.publish", MethodName = "publishToRailway")]
+    public static IResourceBuilder<DotnetProjectResource> PublishDotnetProjectToRailway(
+        this IResourceBuilder<DotnetProjectResource> builder,
+        IResourceBuilder<RailwayTargetResource> target,
+        RailwayServiceOptionsDto? options = null) => builder.PublishToRailway(target, options is null ? null : options.ApplyTo);
+
     /// <summary>Gets the typed deployment outputs for a Railway service.</summary>
     [AspireExportIgnore(Reason = "TypeScript uses individual output exports.")]
     public static RailwayServiceOutputs GetRailwayOutputs<T>(this IResourceBuilder<T> builder) where T : IResource
@@ -168,6 +175,16 @@ public static class RailwayBuilderExtensions
         return builder;
     }
 
+    /// <summary>Requires a Railway-backed resource to deploy successfully before this project.</summary>
+    [AspireExport("pinguapps.railway.dotnetProject.dependsOn", MethodName = "withRailwayDeploymentDependency")]
+    public static IResourceBuilder<DotnetProjectResource> WithRailwayDeploymentDependency(this IResourceBuilder<DotnetProjectResource> builder, IResourceBuilder<IResource> prerequisite)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(prerequisite);
+        builder.Resource.Annotations.OfType<RailwayServiceAnnotation>().Single().Options.DeploymentDependsOn.Add(prerequisite.Resource);
+        return builder;
+    }
+
     /// <summary>Gets a container's Railway private hostname as a guest-language expression.</summary>
     [AspireExport("pinguapps.railway.container.privateHost", MethodName = "getRailwayPrivateHostname")]
     public static ReferenceExpression GetRailwayPrivateHostname(this IResourceBuilder<ContainerResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().PrivateHostname}");
@@ -175,6 +192,10 @@ public static class RailwayBuilderExtensions
     /// <summary>Gets a project's Railway private hostname as a guest-language expression.</summary>
     [AspireExport("pinguapps.railway.project.privateHost", MethodName = "getRailwayPrivateHostname")]
     public static ReferenceExpression GetRailwayPrivateHostname(this IResourceBuilder<ProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().PrivateHostname}");
+
+    /// <summary>Gets a project's Railway private hostname as a guest-language expression.</summary>
+    [AspireExport("pinguapps.railway.dotnetProject.privateHost", MethodName = "getRailwayPrivateHostname")]
+    public static ReferenceExpression GetRailwayPrivateHostname(this IResourceBuilder<DotnetProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().PrivateHostname}");
 
     /// <summary>Gets the exact container deployment identity as a guest-language expression.</summary>
     [AspireExport("pinguapps.railway.container.deploymentId", MethodName = "getRailwayDeploymentId")]
@@ -184,6 +205,10 @@ public static class RailwayBuilderExtensions
     [AspireExport("pinguapps.railway.project.deploymentId", MethodName = "getRailwayDeploymentId")]
     public static ReferenceExpression GetRailwayDeploymentId(this IResourceBuilder<ProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().DeploymentId}");
 
+    /// <summary>Gets the exact project deployment identity as a guest-language expression.</summary>
+    [AspireExport("pinguapps.railway.dotnetProject.deploymentId", MethodName = "getRailwayDeploymentId")]
+    public static ReferenceExpression GetRailwayDeploymentId(this IResourceBuilder<DotnetProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().DeploymentId}");
+
     /// <summary>Gets the image observed for the completed container deployment.</summary>
     [AspireExport("pinguapps.railway.container.image", MethodName = "getRailwayImage")]
     public static ReferenceExpression GetRailwayImage(this IResourceBuilder<ContainerResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().Image}");
@@ -191,6 +216,10 @@ public static class RailwayBuilderExtensions
     /// <summary>Gets the image observed for the completed project deployment.</summary>
     [AspireExport("pinguapps.railway.project.image", MethodName = "getRailwayImage")]
     public static ReferenceExpression GetRailwayImage(this IResourceBuilder<ProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().Image}");
+
+    /// <summary>Gets the image observed for the completed project deployment.</summary>
+    [AspireExport("pinguapps.railway.dotnetProject.image", MethodName = "getRailwayImage")]
+    public static ReferenceExpression GetRailwayImage(this IResourceBuilder<DotnetProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().Image}");
 
     /// <summary>Gets the source snapshot identity associated with a completed container build.</summary>
     [AspireExport("pinguapps.railway.container.buildFingerprint", MethodName = "getRailwayBuildFingerprint")]
@@ -200,6 +229,10 @@ public static class RailwayBuilderExtensions
     [AspireExport("pinguapps.railway.project.buildFingerprint", MethodName = "getRailwayBuildFingerprint")]
     public static ReferenceExpression GetRailwayBuildFingerprint(this IResourceBuilder<ProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().BuildFingerprint}");
 
+    /// <summary>Gets the source snapshot identity associated with a completed project build.</summary>
+    [AspireExport("pinguapps.railway.dotnetProject.buildFingerprint", MethodName = "getRailwayBuildFingerprint")]
+    public static ReferenceExpression GetRailwayBuildFingerprint(this IResourceBuilder<DotnetProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().BuildFingerprint}");
+
     /// <summary>Gets the SHA256 digest of the exact completed container image.</summary>
     [AspireExport("pinguapps.railway.container.imageDigest", MethodName = "getRailwayImageDigest")]
     public static ReferenceExpression GetRailwayImageDigest(this IResourceBuilder<ContainerResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().ImageDigest}");
@@ -207,6 +240,10 @@ public static class RailwayBuilderExtensions
     /// <summary>Gets the SHA256 digest of the exact completed project image.</summary>
     [AspireExport("pinguapps.railway.project.imageDigest", MethodName = "getRailwayImageDigest")]
     public static ReferenceExpression GetRailwayImageDigest(this IResourceBuilder<ProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().ImageDigest}");
+
+    /// <summary>Gets the SHA256 digest of the exact completed project image.</summary>
+    [AspireExport("pinguapps.railway.dotnetProject.imageDigest", MethodName = "getRailwayImageDigest")]
+    public static ReferenceExpression GetRailwayImageDigest(this IResourceBuilder<DotnetProjectResource> builder) => ReferenceExpression.Create($"{builder.GetRailwayOutputs().ImageDigest}");
 
     /// <summary>Configures infrastructure-only pull credentials for a private container registry.</summary>
     [AspireExport("pinguapps.railway.container.registryCredentials", MethodName = "withRailwayRegistryCredentials")]
@@ -220,6 +257,15 @@ public static class RailwayBuilderExtensions
     /// <summary>Configures infrastructure-only pull credentials for a private project image.</summary>
     [AspireExport("pinguapps.railway.project.registryCredentials", MethodName = "withRailwayRegistryCredentials")]
     public static IResourceBuilder<ProjectResource> WithRailwayRegistryCredentials(this IResourceBuilder<ProjectResource> builder, IResourceBuilder<ParameterResource> username, IResourceBuilder<ParameterResource> password)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ConfigureRegistry(builder.Resource, username, password);
+        return builder;
+    }
+
+    /// <summary>Configures infrastructure-only pull credentials for a private project image.</summary>
+    [AspireExport("pinguapps.railway.dotnetProject.registryCredentials", MethodName = "withRailwayRegistryCredentials")]
+    public static IResourceBuilder<DotnetProjectResource> WithRailwayRegistryCredentials(this IResourceBuilder<DotnetProjectResource> builder, IResourceBuilder<ParameterResource> username, IResourceBuilder<ParameterResource> password)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ConfigureRegistry(builder.Resource, username, password);

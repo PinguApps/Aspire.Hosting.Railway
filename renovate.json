@@ -13,7 +13,8 @@
         "dotnet tool install -g Aspire\\.Cli --version (?<currentValue>\\S+)"
       ],
       "datasourceTemplate": "nuget",
-      "depNameTemplate": "Aspire.Cli"
+      "depNameTemplate": "Aspire.Cli",
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
@@ -24,7 +25,20 @@
         "\"sdk\"\\s*:\\s*\\{\\s*\"version\"\\s*:\\s*\"(?<currentValue>[^\"]+)\""
       ],
       "datasourceTemplate": "nuget",
-      "depNameTemplate": "Aspire.Cli"
+      "depNameTemplate": "Aspire.Cli",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)tests/Aspire\\.Hosting\\.Railway/Fixtures/TypeScriptAppHost/aspire\\.config\\.json$/"
+      ],
+      "matchStrings": [
+        "\"Aspire\\.Hosting\\.Dotnet\"\\s*:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "nuget",
+      "depNameTemplate": "Aspire.Hosting.Dotnet",
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
@@ -35,14 +49,29 @@
         "Target Aspire version:\\s*`(?<currentValue>[^`]+)`"
       ],
       "datasourceTemplate": "nuget",
-      "depNameTemplate": "Aspire.Hosting"
+      "depNameTemplate": "Aspire.Hosting",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)README\\.md$/",
+        "/(^|/)docs/install\\.md$/"
+      ],
+      "matchStrings": [
+        "\"sdk\"\\s*:\\s*\\{\\s*\"version\"\\s*:\\s*\"(?<currentValue>[^\"]+)\"",
+        "(?:Requires \\.NET 10 and Aspire |Aspire CLI )(?<currentValue>\\d+\\.\\d+\\.\\d+(?:-[\\w-]+)*?)\\.(?:\\s|$)"
+      ],
+      "datasourceTemplate": "nuget",
+      "depNameTemplate": "Aspire.Hosting",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
     {
       "matchPackageNames": [
         "Aspire.Cli",
-        "Aspire.Hosting"
+        "/^Aspire\\.Hosting(?:\\.|$)/"
       ],
       "groupName": "aspire monorepo",
       "groupSlug": "aspire-monorepo"

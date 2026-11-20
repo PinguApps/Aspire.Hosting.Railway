@@ -8,7 +8,6 @@ using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
-#pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREPIPELINES003
 
 namespace Aspire.Hosting.Railway.Tests;
