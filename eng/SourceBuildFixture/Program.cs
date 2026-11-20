@@ -25,7 +25,7 @@ if (builder.ExecutionContext.IsPublishMode)
         options.Port = 8080;
         options.PublicDomain = true;
     }
-    builder.AddProject("live-core-project", Path.Combine(builder.AppHostDirectory, "Contexts", "Web", "Web.csproj"))
+    builder.AddDotnetProject("live-core-project", Path.Combine(builder.AppHostDirectory, "Contexts", "Web", "Web.csproj"))
         .WithEnvironment("RUNTIME_PROOF", "runtime-binding-passed")
         .PublishToRailway(target, options =>
         {

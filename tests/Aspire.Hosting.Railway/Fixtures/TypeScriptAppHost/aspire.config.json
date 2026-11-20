@@ -4,10 +4,11 @@
     "language": "typescript/nodejs"
   },
   "sdk": {
-    "version": "13.6.5"
+    "version": "17.0.0"
   },
   "channel": "stable",
   "packages": {
+    "Aspire.Hosting.Dotnet": "17.0.0",
     "PinguApps.Aspire.Hosting.Railway": "1.0.0"
   },
   "Parameters": {

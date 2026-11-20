@@ -1,7 +1,7 @@
 #pragma warning disable ASPIREPIPELINES003
-#pragma warning disable ASPIREPIPELINES001
 
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Dotnet;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -94,7 +94,9 @@ public sealed class ImmutableArtifactContractTests
     {
         IDistributedApplicationBuilder app = CreateBuilder(publish: true);
         string projectPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Aspire.Hosting.Railway.Tests.csproj"));
+#pragma warning disable CS0618 // Exercise compatibility with legacy project registrations.
         IResourceBuilder<ProjectResource> project = app.AddProject("web", projectPath);
+#pragma warning restore CS0618
         IResourceBuilder<RailwayTargetResource> target = CreateTarget(app);
         if (railwayFirst)
         {
@@ -120,6 +122,26 @@ public sealed class ImmutableArtifactContractTests
         Assert.Single(generated, step => step.Name == "railway-deploy-web");
         AssertNoImageBuild(container);
         Assert.Equal($"sha256:{_digest}", Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>()).SHA256);
+    }
+
+    [Fact]
+    public void DotnetProject_PublishesRetainedImageAndExposesOutputs()
+    {
+        IDistributedApplicationBuilder app = CreateBuilder(publish: true);
+        string projectPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Aspire.Hosting.Railway.Tests.csproj"));
+        IResourceBuilder<DotnetProjectResource> project = app.AddDotnetProject("web", projectPath);
+        IResourceBuilder<RailwayTargetResource> target = CreateTarget(app);
+        IResourceBuilder<ContainerResource> dependency = app.AddContainer("worker", "example/worker");
+
+        project.PublishDotnetProjectToRailway(target, new RailwayServiceOptionsDto { Image = _image, Port = 8080 })
+            .WithRailwayDeploymentDependency(dependency);
+
+        RailwayServiceAnnotation annotation = Assert.Single(project.Resource.Annotations.OfType<RailwayServiceAnnotation>());
+        Assert.Equal(_image, annotation.Options.Image);
+        Assert.Equal(8080, annotation.Options.Port);
+        Assert.Same(dependency.Resource, Assert.Single(annotation.Options.DeploymentDependsOn));
+        Assert.Same(annotation.Outputs, project.GetRailwayOutputs());
+        AssertNoImageBuild(project.Resource);
     }
 
     [Fact]

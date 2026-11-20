@@ -38,9 +38,6 @@ if (-not $contexts.StartsWith($work + [IO.Path]::DirectorySeparatorChar, [String
 Remove-Item -LiteralPath $contexts -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item -Path (Join-Path $PSScriptRoot "SourceBuildFixture/*") -Destination $work -Recurse -Force
 $project = Join-Path $work "SourceBuildFixture.csproj"
-$source = Get-Content -LiteralPath $project -Raw
-$source = $source.Replace('Include="PinguApps.Aspire.Hosting.Railway" Version="1.1.0"', "Include=`"PinguApps.Aspire.Hosting.Railway`" Version=`"$PackageVersion`"")
-Set-Content -LiteralPath $project -Value $source -Encoding UTF8
 $feed = [System.Security.SecurityElement]::Escape([IO.Path]::GetFullPath($packages))
 @"
 <configuration>
@@ -50,8 +47,10 @@ $feed = [System.Security.SecurityElement]::Escape([IO.Path]::GetFullPath($packag
 "@ | Set-Content -LiteralPath (Join-Path $work "NuGet.Config") -Encoding UTF8
 $previousPackages = $env:NUGET_PACKAGES
 $previousProof = $env:LIVE_PROOF_VERSION
+$previousFixturePackageVersion = $env:RailwayFixturePackageVersion
 $env:NUGET_PACKAGES = Join-Path $work (".nuget-packages-" + [Guid]::NewGuid().ToString("N"))
 $env:LIVE_PROOF_VERSION = $ProofVersion
+$env:RailwayFixturePackageVersion = $PackageVersion
 Push-Location $work
 try {
     dotnet restore $project --no-cache
@@ -62,5 +61,6 @@ try {
 finally {
     $env:NUGET_PACKAGES = $previousPackages
     $env:LIVE_PROOF_VERSION = $previousProof
+    $env:RailwayFixturePackageVersion = $previousFixturePackageVersion
     Pop-Location
 }

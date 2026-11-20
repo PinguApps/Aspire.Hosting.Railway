@@ -1,5 +1,4 @@
-#pragma warning disable ASPIREPIPELINES001
-#pragma warning disable ASPIREPIPELINES002
+using Aspire.Hosting.Dotnet;
 
 using System.Globalization;
 using System.Security.Cryptography;
@@ -139,7 +138,7 @@ internal static class RailwayDeploymentPipeline
             environment["RAILWAY_DOCKERFILE_PATH"] = RailwaySourceUpload.GetTransportDockerfilePath(sourceBuild);
         }
 
-        if (resource is ProjectResource && annotation.Options.Port is int port)
+        if (resource is ProjectResource or DotnetProjectResource && annotation.Options.Port is int port)
         {
             environment["ASPNETCORE_HTTP_PORTS"] = port.ToString(CultureInfo.InvariantCulture);
         }

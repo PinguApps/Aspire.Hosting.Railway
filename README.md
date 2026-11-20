@@ -6,7 +6,7 @@ Deploy normal Aspire projects and containers into a pre-created, site-owned Rail
 
 ## Install
 
-Requires .NET 10 and Aspire 13.6.5.
+Requires .NET 10 and Aspire 17.0.0.
 
 ```powershell
 dotnet add package PinguApps.Aspire.Hosting.Railway --version 1.0.0
@@ -59,7 +59,7 @@ The read-only target plan validates all declared services before provider mutati
 ```json
 {
   "appHost": { "path": "apphost.mts", "language": "typescript/nodejs" },
-  "sdk": { "version": "13.6.5" },
+  "sdk": { "version": "17.0.0" },
   "packages": { "PinguApps.Aspire.Hosting.Railway": "1.0.0" }
 }
 ```
