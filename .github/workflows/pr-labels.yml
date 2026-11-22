@@ -9,6 +9,10 @@ on:
 jobs:
   labelling:
     name: Labelling
+    # Necessary fragments of the pinned action's pattern. Unchecked labels can remove labels.
+    if: >-
+      contains(github.event.pull_request.body, '- [') &&
+      (contains(github.event.pull_request.body, '] `') || contains(github.event.pull_request.body, ']`'))
     runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: read
