@@ -85,8 +85,9 @@ foreach ($path in $workflowPaths) {
   Add-RegexPin -Path $path -Name "Aspire.Cli" -Pattern "dotnet tool install -g Aspire\.Cli --version (?<version>\S+)"
 }
 
-Add-RegexPin -Path "README.md" -Name "Aspire requirement" -Pattern 'Requires \.NET 10 and Aspire (?<version>\d+\.\d+\.\d+(?:-[\w-]+)*?)\.(?=\s|$)'
-Add-RegexPin -Path "docs/install.md" -Name "Aspire CLI requirement" -Pattern 'Aspire CLI (?<version>\d+\.\d+\.\d+(?:-[\w-]+)*?)\.(?=\s|$)'
+Add-RegexPin -Path "README.md" -Name "Aspire requirement" -Pattern 'Requires \.NET 10 and Aspire (?<version>\d+\.\d+\.\d+) or later\.'
+Add-RegexPin -Path "docs/install.md" -Name "Aspire CLI requirement" -Pattern 'Aspire CLI (?<version>\d+\.\d+\.\d+) or later\.'
+Add-RegexPin -Path "docs/install.md" -Name "Aspire requirement" -Pattern 'integration requires Aspire (?<version>\d+\.\d+\.\d+) or later\.'
 Add-RegexPin -Path "README.md" -Name "Aspire SDK sample" -Pattern '"version"\s*:\s*"(?<version>\d+\.\d+\.\d+(?:-[^"]+)?)"'
 Add-RegexPin -Path "docs/install.md" -Name "Aspire SDK install samples" -Pattern '"version"\s*:\s*"(?<version>\d+\.\d+\.\d+(?:-[^"]+)?)"'
 Add-RegexPin -Path "AGENTS.md" -Name "Target Aspire version" -Pattern 'Target Aspire version:\s*`(?<version>[^`]+)`'
